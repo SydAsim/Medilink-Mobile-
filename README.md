@@ -169,7 +169,7 @@ graph TD
     Weather -->|Clear Weather| WB2["No Weather Boost"]
     
     WB1 & WB2 --> MapRisk{"5. Infrastructure Scan (Google Places)"}
-    MapRisk -->|High-Risk Zone (Hospitals/Schools/Transit)| MB1["Add Map Risk Score (+10%)"]
+    MapRisk -->|High-Risk Zone| MB1["Add Map Risk Score (+10%)"]
     MapRisk -->|Normal Zone| MB2["No Map Risk Boost"]
     
     MB1 & MB2 --> Social{"6. Social Media Check (social_signals_demo)"}
