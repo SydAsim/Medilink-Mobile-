@@ -312,17 +312,13 @@ To build the standalone `.apk` executable for testing:
 
 ---
 
-## 🚀 Antigravity Execution Trace Logs (Hackathon Submission)
+## 🛠️ Tech Stack & Technologies Used
 
-*This table tracks the pair programming actions taken with Antigravity to build and refine the mobile app.*
+- **Frontend (Web App)**: Next.js 14 (App Router), Tailwind CSS, TypeScript, Framer Motion, Radix UI.
+- **Mobile App**: React Native, Expo SDK 55, Expo Router (File-based Navigation), Tailwind CSS, TypeScript.
+- **Backend & Real-Time Sync**: Google Cloud Firestore (Live Snapshot Listeners), Firebase Storage (Incident asset uploads).
+- **AI Symptom Triage**: Gemini 2.5 Flash, Gemini 2.0 Flash, and OpenAI GPT-4o with automated multi-key rotation and rule-engine fallback logic.
+- **Geographic Information Systems (GIS)**: `react-native-maps`, `expo-location` (GPS precision locking), Nominatim OpenStreetMap API (Reverse-geocoding coordinates to street addresses).
+- **Communication & Continuous Care**: Twilio (SMS/voice alerts), Resend (Transactional emails), CIRO Temporal Task Scheduler (for medication and check-up reminders).
+- **Context API Integrations**: Open-Meteo API (Adverse weather risk scoring), Google Places API (High-traffic zone mapping).
 
-| Trace ID | Action Category | Task Summary | Antigravity AI Tools Employed | Status |
-| :--- | :--- | :--- | :--- | :--- |
-| **TR-001** | Discovery | Scanned Next.js web portal, folder structure, and Firestore schemas. | `list_dir`, `grep_search`, `view_file` | Completed |
-| **TR-002** | Initialization | Created `medilinkMobile` repository, configured git, and scaffolded the Expo TS SDK. | `run_command` (`mkdir`, `git init`), `create-expo-app` | Completed |
-| **TR-003** | Dependency Setup | Installed Expo-compatible Firebase client SDK, Location, Maps, and Lucide Icons. | `run_command` (`npx expo install ...`) | Completed |
-| **TR-004** | Core Coding | Ported types, Firebase credentials, Gemini direct-client models, and the CIRO signal fusion pipeline. | `write_to_file` (`env.ts`, `aiService.ts`, `caseService.ts`, `intelAgent.ts`) | Completed |
-| **TR-005** | UI Transition | Coded the Role selector, Patient portal, Doctor hub, and Dispatch console. | `write_to_file` (`_layout.tsx`, `index.tsx`, `patient.tsx`, `doctor.tsx`, `emergency.tsx`) | Completed |
-| **TR-006** | Responsiveness | Fixed mobile/tablet responsiveness, layout column stacking, and map height overflow issues. | `multi_replace_file_content`, `replace_file_content` | Completed |
-| **TR-007** | Security & Push | Refactored hardcoded keys to `.env` using `EXPO_PUBLIC_` and cleared Git commit history. | `write_to_file`, `replace_file_content`, `run_command` | Completed |
-| **TR-008** | Documentation | Compiled comprehensive project architecture and walkthrough workflows into the mobile README. | `write_to_file` (`README.md`) | Completed |
