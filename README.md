@@ -1,127 +1,328 @@
-# MediLink Mobile — Clinical Triage & CIRO command Center
+# MediLink Mobile — Clinical Triage & CIRO Command Center
 
-Welcome to **MediLink Mobile**, the native mobile counterpart to the Next.js MediLink Platform. 
+Welcome to **MediLink Mobile**, the cross-platform native counterpart of the **MediLink Emergency Response Platform**. 
 
-Developed entirely using **React Native + Expo**, this application serves as a self-contained, serverless portal connecting patients, physicians, and emergency dispatch teams directly to the **CIRO (Crisis Intelligence & Response Orchestration)** network.
-
----
-
-## 🚀 Key Innovation highlights
-
-### 1. Serverless Mobile AI Triage
-Because packaged mobile APKs lack backend routes, MediLink Mobile features a direct-to-client AI symptom classifier. It initiates parallel fallback requests:
-* **Primary:** Gemini 2.5 Flash
-* **Fallback 1:** Gemini 2.5 Flash (secondary rotated key)
-* **Fallback 2:** Gemini 2.0 Flash
-* **Fallback 3:** OpenAI GPT-4o / GPT-4o-mini
-* **Fallback 4:** Local deterministic keywords rule engine
-
-It supports inputs in **English, Urdu, Pashto, Roman Urdu, and Roman Pashto**, parsing messy local speech ("mere hath se khoon nikal raha hai") into structured clinical English JSON.
-
-### 2. Full CIRO Multi-Agent Signal Fusion (Mobile Native)
-When an emergency is submitted, a native async thread launches the **CIRO Signal Fusion Pipeline** (`runIntelAgent`):
-1. **Geographic Cluster Scanning:** Scans a 1.5km radius in Firestore for overlapping emergencies inside a 30-minute window.
-2. **Adverse Weather Check:** Contacts the **Open-Meteo API** to factor wind speeds and precipitation into rescue risk models.
-3. **Map Context Check:** Queries the **Google Places API** to flags nearby high-risk infrastructures (hospitals, highways, schools).
-4. **Social Media Cross-Reference:** Scans `social_signals_demo` for matching hashtags or regional alerts.
-5. **Autonomic Escalation:** Integrates all clues into a composite confidence score. If confidence is $\ge 65\%$, it autonomously escalates the case into a **Crisis Event**.
+Developed using **React Native + Expo (SDK 55)** and **TypeScript**, this mobile app serves as a real-time portal connecting patients, doctors, and emergency dispatchers directly to the **CIRO (Crisis Intelligence & Response Orchestration)** network. By linking directly to the same Firestore backend as the Next.js web application, it ensures seamless synchronization and instant emergency management across all platforms.
 
 ---
 
-## 🏗️ System Architecture
+## 🏗️ System Architecture & Shared Backend
+
+MediLink is designed around a **Single-Source-of-Truth (SSOT)** database architecture. Both the web application (Next.js) and the mobile application (React Native) share the same Firebase configuration, syncing state in real-time through Firestore listeners.
 
 ```mermaid
 graph TD
-    A[React Native Mobile App] -->|Real-time Sync| B[(Firestore Database)]
-    A -->|Direct Request| C[Gemini AI Triage API]
-    A -->|Reverse Geocoding| D[OpenStreetMap / Location Services]
-    
-    subgraph "CIRO Multi-Agent Pipeline"
-        A -->|Writes logs| E[(Firestore intelligence_logs)]
-        A -->|Fuses signals| F[runIntelAgent Async Thread]
-        F -->|Checks weather| G[Open-Meteo API]
-        F -->|Checks risk context| H[Google Places API]
-        F -->|Calculates confidence| I{Confidence >= 65%?}
-        I -->|Yes| J[(Firestore crisis_events)]
+    subgraph "Dual Client Interfaces"
+        Web["Next.js Web Application"]
+        Mobile["Expo React Native Mobile App"]
     end
+
+    subgraph "Shared Firebase Backend (fourth-case-416809)"
+        Firestore[("Google Cloud Firestore")]
+        Storage[("Firebase Storage")]
+    end
+
+    subgraph "CIRO Multi-Agent Pipeline"
+        Intel["IntelAgent - Signal Fusion"]
+        Logistics["LogisticsAgent - Distance Calc"]
+        Strategist["StrategistAgent - Decision Core"]
+    end
+
+    Web <-->|Real-time listeners & writes| Firestore
+    Mobile <-->|Real-time listeners & writes| Firestore
+    Web -->|Uploads medical records & photos| Storage
+    Mobile -->|Uploads live incident photos| Storage
+    
+    Firestore <-->|Read/Write State| Intel
+    Firestore <-->|Read/Write State| Logistics
+    Firestore <-->|Read/Write State| Strategist
+```
+
+### 🗄️ Shared Firestore Collections & Schemas
+
+The database structure consists of the following key collections:
+
+#### 1. `cases` (Primary Incidents Document)
+Stores details of every active and historical emergency.
+```json
+{
+  "id": "firestore_doc_id",
+  "patientPhone": "string (+92XXXXXXXXXX)",
+  "patientName": "string (optional)",
+  "language": "english | urdu | pashto",
+  "issueText": "string (original symptom input)",
+  "imageUrl": "string (Firebase Storage link, optional)",
+  "latitude": "number (GPS)",
+  "longitude": "number (GPS)",
+  "accuracy": "number (GPS accuracy in meters)",
+  "severity": "critical | high | medium | low",
+  "aiSummary": "string (translated & summarized in clinical English)",
+  "aiSuggestions": [
+    "string (medical actions formatted for doctor review)"
+  ],
+  "situationalSuggestions": [
+    "string (first aid / immediate safety steps for patient)"
+  ],
+  "emergencyRequired": "boolean",
+  "status": "pending | assigned | dispatched | arrived | resolved | completed | closed",
+  "address": "string (reverse-geocoded local address)",
+  "assignedDoctorId": "string (optional)",
+  "protocolApproved": "boolean (approved by doctor)",
+  "createdAt": "number (timestamp)",
+  "updatedAt": "number (timestamp)"
+}
+```
+
+#### 2. `patient_profiles` (Patient Medical History)
+Used to cross-reference pre-existing conditions, allergies, and medication history during triage.
+```json
+{
+  "phone": "string (Document ID - e.g., +923331234567)",
+  "name": "string",
+  "email": "string",
+  "bloodGroup": "string",
+  "allergies": ["string (e.g. Penicillin)"],
+  "chronicConditions": ["string (e.g. Asthma, Diabetes)"],
+  "currentMedications": [
+    {
+      "id": "string",
+      "name": "string",
+      "dosage": "string",
+      "frequency": "string",
+      "startDate": "number",
+      "endDate": "number (optional)",
+      "prescribedBy": "string",
+      "remainingDoses": "number",
+      "totalDoses": "number"
+    }
+  ],
+  "pastMedicalRecords": ["string (URLs to docs in Storage)"],
+  "createdAt": "number",
+  "updatedAt": "number"
+}
+```
+
+#### 3. `cases/{caseId}/messages` (Real-Time Communication Sub-Collection)
+Enables instantaneous chat between patients, doctors, and logistics responders.
+```json
+{
+  "id": "string",
+  "caseId": "string",
+  "senderId": "string (e.g. patient-phone or doctor-id)",
+  "senderRole": "patient | doctor | emergency",
+  "senderName": "string",
+  "message": "string",
+  "timestamp": "number"
+}
+```
+
+#### 4. `intelligence_logs` (CIRO Audit Trail)
+Houses logs of multi-agent reasoning during triage.
+```json
+{
+  "id": "string",
+  "caseId": "string (optional)",
+  "crisisId": "string (optional)",
+  "agentName": "Orchestrator | TriageAgent | LogisticsAgent | IntelAgent | StrategistAgent",
+  "thought": "string (agent reasoning process)",
+  "action": "string (e.g. CLUSTER_DETECTED | WEATHER_ALERT | CRISIS_ESCALATED)",
+  "confidence": "number (0.0 to 1.0)",
+  "timestamp": "number"
+}
+```
+
+#### 5. `scheduled_tasks` (Continuous Care Buffer)
+Holds queued reminders like medication alarms that trigger automated alerts.
+```json
+{
+  "id": "string",
+  "type": "medication_reminder | emergency_followup",
+  "targetPhone": "string",
+  "targetEmail": "string",
+  "data": {
+    "name": "string",
+    "dosage": "string",
+    "frequency": "string"
+  },
+  "scheduledFor": "number (epoch timestamp)",
+  "status": "pending | executed | cancelled | failed",
+  "createdAt": "number"
+}
 ```
 
 ---
 
-## 📱 Mobile Interfaces
+## 🤖 CIRO Multi-Agent Signal Fusion Pipeline
 
-### 1. Patient Portal
-* **Reporting Form:** Enter phone numbers, select languages, upload/capture injury images using `expo-image-picker`, and write/speak symptoms.
-* **Live GPS Tracking:** Uses `expo-location` to lock coordinate accuracy, with Nomianitim OpenStreetMap reverse-geocoding.
-* **AI Guidances:** Displays real-time situational advice, clinical severities, and doctor-approved prescriptions.
-* **Direct Messenger:** Real-time chat box with the assigned doctor or emergency crew.
+When a patient reports an emergency, the **CIRO Signal Fusion Pipeline** is executed asynchronously in the background. It aggregates multiple evidence streams to determine whether the incident is isolated or part of a wider regional crisis.
 
-### 2. Doctor Hub
-* **Incident Queue:** Real-time stream of all patient emergencies sorted chronologically.
-* **Diagnostic Panel:** View AI translation summaries, suspected conditions, confidence scores, and injury photos.
-* **Safety & Allergies Alerts:** Cross-references patient profile records to warn about allergy contraindications.
-* **Clinical Approvals:** One-click review to push prescribed treatments to the patient, updating profile histories and scheduling reminders.
+```mermaid
+graph TD
+    Start["1. Emergency Signal Submitted (Orchestrator)"] --> GPS["2. Lock GPS Coordinates"]
+    GPS --> Cluster{"3. Cluster Scan (TriageAgent)"}
+    
+    Cluster -->|Nearby cases within 1.5km| CB1["Add Cluster Score (+15% to +60%)"]
+    Cluster -->|Isolated| CB2["No Cluster Boost"]
+    
+    CB1 & CB2 --> Weather{"4. Weather Scan (Open-Meteo)"}
+    Weather -->|Adverse Weather Detected| WB1["Add Weather Score (+15%)"]
+    Weather -->|Clear Weather| WB2["No Weather Boost"]
+    
+    WB1 & WB2 --> MapRisk{"5. Infrastructure Scan (Google Places)"}
+    MapRisk -->|High-Risk Zone (Hospitals/Schools/Transit)| MB1["Add Map Risk Score (+10%)"]
+    MapRisk -->|Normal Zone| MB2["No Map Risk Boost"]
+    
+    MB1 & MB2 --> Social{"6. Social Media Check (social_signals_demo)"}
+    Social -->|Corroborating Hashtags/News| SB1["Add Social Score (+10% to +15%)"]
+    Social -->|Isolated| SB2["No Social Boost"]
+    
+    SB1 & SB2 --> TriageLevel{"7. Triage Severity Bonus"}
+    TriageLevel -->|Critical / High Severity| TB1["Add Severity Boost (+10%)"]
+    TriageLevel -->|Medium / Low Severity| TB2["No Severity Boost"]
+    
+    TB1 & TB2 --> Eval{"8. StrategistAgent Evaluation"}
+    
+    Eval --> ScoreCheck{"Is Confidence >= 65%?"}
+    ScoreCheck -->|Yes| Escalate["9. Create CRISIS EVENT in Firestore"]
+    ScoreCheck -->|No| Standard["9. Route as Standard isolated case"]
+    
+    Escalate & Standard --> Assign{"10. LogisticsAgent Resource Search"}
+    Assign --> Msg["11. Send nearest Ambulance/Hospital details directly to patient chat"]
+```
 
-### 3. Emergency Dispatcher
-* **Dispatch Queue:** Real-time incident list prioritized by critical severity levels.
-* **Google Maps Tracking:** Live coordinates markers for incidents.
-* **CIRO Reasoning Feed:** Real-time black-terminal log streaming multi-agent thoughts directly from Firestore.
+### Signal Fusion Stages:
+1. **Cluster Scan (`TriageAgent`)**: Queries cases in Firestore created within the last 30 minutes in a 1.5km radius. Confirmed cluster patterns add up to **+60%** confidence.
+2. **Weather Scan (`TriageAgent`)**: Hits Open-Meteo REST API at GPS coordinates. Adverse weather conditions (e.g. torrential rain, dense fog, sandstorms) boost confidence by **+15%**.
+3. **Map Context Check (`LogisticsAgent`)**: Queries Google Places API to search within 300m for critical facilities (schools, transport terminals). Identifying high-traffic zone risk adds **+10%**.
+4. **Social Signals Corroboration (`IntelAgent`)**: Scans the `social_signals_demo` collection for active, geographically matching social posts/hashtags. Corroboration yields up to **+15%**.
+5. **Autonomic Escalation (`StrategistAgent`)**: If the cumulative confidence score reaches **65% or more**, CIRO automatically registers a `crisis_event` (such as a *Urban Flood Emergency* or a *Multi-Casualty Incident*).
+6. **Logistics Routing (`LogisticsAgent`)**: Immediately calculates the nearest hospital and ambulance service, sends details directly to the patient's chat, and locks route directions.
+
+---
+
+## 📱 Mobile Portal Interfaces & User Scenarios
+
+### 1. Patient Portal (Reporting & Guidance)
+* **Tech Stack**: React Native components, `expo-image-picker` (camera/gallery uploads), `expo-location` (GPS locks), Gemini API (fallback to GPT-4o and regex rule engine).
+* **Multi-Lingual AI Input**: Patients can input text or images. Gemini translates inputs from Urdu, Roman Urdu, Pashto, or Roman Pashto into clinical English, identifies possible conditions, and computes immediate first-aid safety rules.
+* **Live GPS Tracking**: Resolves the exact coordinates into a readable address using Nominatim reverse-geocoding, making coordinates instantly dispatchable.
+* **Situational Guidance Panel**: Renders dynamic map tracking, pending reviewer details, and custom emergency instructions.
+
+#### 🏃‍♂️ Patient Walkthrough Example:
+1. **Login & Lock Location**: Patient enters their phone number (`+923331112222`). The app uses `expo-location` to lock coordinates at `34.0150, 71.5805` (Peshawar).
+2. **Incident Report**: The patient types in Roman Urdu: *"Meri chhati me boht tez dard hai aur sans lene me masla ho raha hai"* (My chest is hurting badly and I am having trouble breathing) and attaches a photo of their medication bottle.
+3. **Client-Side AI Processing**:
+   - The app reads the primary key from `ENV` and queries Gemini.
+   - Gemini translates the Roman Urdu to English, categorizes severity as **Critical**, and identifies the symptoms as suspected **Myocardial Infarction (Heart Attack)**.
+   - It drafts patient advice: *"Sit upright. Loosen tight clothing. Chew a full aspirin if available. Do not engage in physical exertion."*
+4. **Firestore Record Creation**: The app uploads the photo to Firebase Storage and saves the formatted incident document to `cases/` in Firestore.
+5. **Active Tracking Page**: The patient is routed to the active tracking panel. They see their live coordinates and a message indicating the case is queued for physician review.
+
+---
+
+### 2. Doctor Hub (Review & Clinical Approvals)
+* **Tech Stack**: Swipe lists, React Native modal popups, Firebase Real-Time Listeners.
+* **Diagnostics Interface**: Displays patient symptoms, AI summaries, suspected conditions, pre-existing allergies, and attached images.
+* **Safety & Contraindication Alerts**: Warns the doctor if the AI-suggested protocol includes substances the patient is allergic to (by cross-referencing `patient_profiles`).
+* **One-Click Approval**: Clicking "Approve Protocol" updates the case status, alerts the patient, and registers medication scheduling timers.
+
+#### 🩺 Doctor Walkthrough Example:
+1. **Live Incident Feed**: Dr. Farooq opens the Doctor Hub on his mobile app. He sees a new **Critical** incident card highlighting a heart attack suspect.
+2. **Detailed Examination**:
+   - Dr. Farooq opens the patient card.
+   - The UI shows the symptom: *"Myocardial Infarction"* and lists the patient's chronic conditions (Diabetes) and allergies (None).
+   - The AI suggestions list: *"Aspirin 300mg — chew immediately"* and *"Glyceryl Trinitrate (GTN) 0.5mg sublingual"*.
+3. **Clinical Action**:
+   - Dr. Farooq clicks **Approve Protocol**.
+   - Firestore immediately triggers an update: `cases/{caseId}/protocolApproved = true` and registers the prescribed medicines.
+   - The patient's portal automatically updates in real-time, showing the approved treatment advice.
+   - The system initiates `scheduleMedicineReminders` which parses the dosage details and logs a scheduled task inside `scheduled_tasks` to check up on the patient.
+
+---
+
+### 3. Emergency Dispatcher (Ambulance & Logistics)
+* **Tech Stack**: `react-native-maps`, real-time chat, CIRO terminal logs.
+* **Interactive Map**: Shows active incident markers.
+* **CIRO Log Stream**: Renders a black terminal console displaying live logs from `intelligence_logs` so dispatchers can watch the multi-agent reasoning in real-time.
+* **Ambulance Tracking**: Lets dispatchers update status (`assigned` -> `dispatched` -> `arrived` -> `completed`), updating maps across both dispatcher and patient apps.
+
+#### 🚑 Dispatcher Walkthrough Example:
+1. **Emergency Intake**: Dispatcher Sarah monitors the Emergency Dispatch console. A critical card for a heart attack pops up at coordinates `34.0150, 71.5805`.
+2. **Viewing AI Reasoning**:
+   - Sarah opens the case. The terminal shows:
+     `[TriageAgent]: Querying cases. 0 nearby reports. Isolated incident.`
+     `[TriageAgent]: Weather clear (22°C).`
+     `[LogisticsAgent]: High-risk zone inferred: Main road area.`
+     `[LogisticsAgent]: Nearest ambulance: Edhi Cantt (0.8km, 3 mins). Hospital: Hayatabad Medical Complex.`
+3. **Dispatch Execution**:
+   - Sarah clicks **Assign Unit**. The map renders the route.
+   - Sarah clicks **Dispatch**. The Edhi Cantt ambulance team receives the dispatch alert. The case status updates to `dispatched` in Firestore.
+   - The patient's chat automatically receives an alert from the **CIRO Logistics Agent**:
+     *"Ambulance Dispatched. Nearest Hospital: Hayatabad Medical Complex. ETA: 3 mins. Help is on the way."*
+   - Sarah stays in touch with the patient using the built-in real-time chat panel until the ambulance marks its arrival (`Mark Arrived on Scene`).
 
 ---
 
 ## 🛠️ Installation & Setup
 
-1. **Clone & Enter Repository:**
+1. **Clone & Enter Directory**:
    ```bash
    cd medilinkMobile
    ```
-2. **Install Node Modules:**
+2. **Install Dependencies**:
    ```bash
    npm install
    ```
-3. **Launch Expo Developer Client:**
+3. **Set Up Local Env File**:
+   Create a `.env` file in the root directory:
+   ```env
+   EXPO_PUBLIC_GEMINI_API_KEY=your_gemini_key
+   EXPO_PUBLIC_GEMINI_API_KEY_FALLBACK=your_fallback_gemini_key
+   EXPO_PUBLIC_OPENAI_API_KEY=your_openai_key
+   EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=your_google_maps_key
+   EXPO_PUBLIC_RESEND_API_KEY=your_resend_email_key
+   ```
+4. **Start Metro Bundler**:
    ```bash
    npx expo start
    ```
-4. **Run on Simulators or Physical Phones:**
-   * Press `a` for Android Emulator.
-   * Scan QR Code via the **Expo Go** application on iOS/Android.
+5. **Run App**:
+   - Press `a` for Android Emulator.
+   - Scan the QR code using the **Expo Go** app on your physical iOS or Android phone.
 
 ---
 
-## 📦 Packaging Standalone Android APK
+## 📦 Compiling Standalone Android APK
 
-To build the standalone `.apk` executable for judging:
+To build the standalone `.apk` executable for testing:
 
-1. **Install EAS CLI globally:**
+1. **Install EAS CLI globally**:
    ```bash
    npm install -g eas-cli
    ```
-2. **Initialize EAS Project configuration:**
+2. **Configure EAS Project**:
    ```bash
    eas build:configure
    ```
-3. **Execute standalone Android Preview build:**
+3. **Execute Standalone Android Build**:
    ```bash
    eas build --platform android --profile preview
    ```
-   *This commands compiles the application in the Expo cloud and yields a direct download link to the final `.apk` file.*
+   *This command compiles the application in the Expo cloud and yields a direct download link to the final `.apk` file.*
 
 ---
 
 ## 🚀 Antigravity Execution Trace Logs (Hackathon Submission)
 
-*This section provides the trace logs of our pair programming sessions with Antigravity to vibes-code this transition.*
+*This table tracks the pair programming actions taken with Antigravity to build and refine the mobile app.*
 
-### Session Trace Log: Porting Next.js to React Native
-
-| Trace ID | Action Category | Task Summary | Antigravity AI Subagents & Tools Employed | Status |
+| Trace ID | Action Category | Task Summary | Antigravity AI Tools Employed | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| **TR-001** | Discovery | Scanned Next.js web portal routes, folder architectures, Firestore schemas, and clinical triage prompts. | `list_dir`, `grep_search`, `view_file` | Completed |
-| **TR-002** | Initialization | Created `medilinkMobile` repository root, configured a clean `.git` environment, and scaffolded the Expo TS SDK. | `run_command` (`mkdir`, `git init`), `create-expo-app` | Completed |
-| **TR-003** | Dependency Setup | Installed Expo-compatible Firebase client SDK, Location services, Maps APIs, Image Pickers, and Lucide Icons. | `run_command` (`npx expo install ...`) | Completed |
-| **TR-004** | Core Coding | Ported clinical types, Firebase credentials, Gemini direct-client models, and the full multi-agent signal fusion pipeline. | `write_to_file` (`env.ts`, `aiService.ts`, `caseService.ts`, `intelAgent.ts`) | Completed |
-| **TR-005** | UI Transition | Replaced experimental tab structures with clean Stack layouts. Coded the Role dashboard, Patient forms, Doctor overlays, and Dispatch console. | `write_to_file` (`_layout.tsx`, `index.tsx`, `patient.tsx`, `doctor.tsx`, `emergency.tsx`) | Completed |
-| **TR-006** | Documentation | Created comprehensive project architecture README and compiled Antigravity trace tables for the team submission. | `write_to_file` (`README.md`) | Completed |
-
-**End of Trace.**
+| **TR-001** | Discovery | Scanned Next.js web portal, folder structure, and Firestore schemas. | `list_dir`, `grep_search`, `view_file` | Completed |
+| **TR-002** | Initialization | Created `medilinkMobile` repository, configured git, and scaffolded the Expo TS SDK. | `run_command` (`mkdir`, `git init`), `create-expo-app` | Completed |
+| **TR-003** | Dependency Setup | Installed Expo-compatible Firebase client SDK, Location, Maps, and Lucide Icons. | `run_command` (`npx expo install ...`) | Completed |
+| **TR-004** | Core Coding | Ported types, Firebase credentials, Gemini direct-client models, and the CIRO signal fusion pipeline. | `write_to_file` (`env.ts`, `aiService.ts`, `caseService.ts`, `intelAgent.ts`) | Completed |
+| **TR-005** | UI Transition | Coded the Role selector, Patient portal, Doctor hub, and Dispatch console. | `write_to_file` (`_layout.tsx`, `index.tsx`, `patient.tsx`, `doctor.tsx`, `emergency.tsx`) | Completed |
+| **TR-006** | Responsiveness | Fixed mobile/tablet responsiveness, layout column stacking, and map height overflow issues. | `multi_replace_file_content`, `replace_file_content` | Completed |
+| **TR-007** | Security & Push | Refactored hardcoded keys to `.env` using `EXPO_PUBLIC_` and cleared Git commit history. | `write_to_file`, `replace_file_content`, `run_command` | Completed |
+| **TR-008** | Documentation | Compiled comprehensive project architecture and walkthrough workflows into the mobile README. | `write_to_file` (`README.md`) | Completed |
