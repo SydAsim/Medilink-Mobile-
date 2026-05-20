@@ -52,6 +52,13 @@
           "photosPermission": "The app accesses your photos to let you upload images of emergencies.",
           "cameraPermission": "The app accesses your camera to let you take photos of emergencies."
         }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow MediLink to use the microphone for voice dictation.",
+          "speechRecognitionPermission": "Allow MediLink to convert your speech to text for emergency reports."
+        }
       ]
     ],
     "experiments": {

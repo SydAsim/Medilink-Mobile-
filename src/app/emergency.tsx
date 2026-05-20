@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   StyleSheet,
   View,
@@ -10,10 +10,13 @@ import {
   Alert,
   Dimensions,
   useColorScheme,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import Map from "../components/ui/Map";
+import * as Location from "expo-location";
 import {
   ShieldAlert,
   ChevronLeft,
@@ -77,6 +80,111 @@ export default function EmergencyDispatcher() {
   const [chatMessages, setChatMessages] = useState<any[]>([]);
   const [typedMessage, setTypedMessage] = useState("");
   const [isLogisticsCollapsed, setIsLogisticsCollapsed] = useState(false);
+  const chatInputRef = useRef<TextInput>(null);
+  const [userLocation, setUserLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const processingLogistics = useRef<Set<string>>(new Set());
+
+  const triggerLogisticsDispatch = async (caseItem: PatientCase) => {
+    try {
+      const lat = caseItem.latitude || 33.9749;
+      const lng = caseItem.longitude || 71.4500;
+
+      // 1. Log start
+      await addIntelligenceLog({
+        caseId: caseItem.id,
+        agentName: "LogisticsAgent",
+        thought: `🚨 CIRO Dispatch Agent activated automatically for ${caseItem.severity.toUpperCase()} case. GPS Locked: [${lat.toFixed(4)}, ${lng.toFixed(4)}]. Initiating hospital and ambulance search...`,
+        confidence: 1.0,
+        action: "LOGISTICS_INITIATED",
+      });
+
+      // 2. Mock facilities nearest selection
+      const bestHospital = {
+        name: "Hayatabad Medical Complex",
+        address: "Phase 5, Hayatabad, Peshawar",
+        phone: "+92-91-9217480",
+        distance: "1.4 km",
+        duration: "5 mins",
+        type: "hospital"
+      };
+
+      const bestAmbulance = {
+        name: "Rescue 1122",
+        address: "Saddar, Peshawar",
+        phone: "1122",
+        distance: "1.1 km",
+        duration: "4 mins",
+        type: "ambulance_service"
+      };
+
+      // 3. Log resource findings
+      await addIntelligenceLog({
+        caseId: caseItem.id,
+        agentName: "LogisticsAgent",
+        thought: `Resource search complete. Identified nearest Hospital: ${bestHospital.name} (${bestHospital.distance}, ETA: ${bestHospital.duration}) and Ambulance: ${bestAmbulance.name} (ETA: ${bestAmbulance.duration}).`,
+        confidence: 0.96,
+        action: "RESOURCES_FOUND",
+      });
+
+      // 4. Send direct message to the patient
+      const chatMessage = `CIRO Logistics Agent has identified the nearest emergency resources for you:\n\n` +
+        `🏥 Nearest Hospital: ${bestHospital.name}\n` +
+        `📍 ${bestHospital.address}\n` +
+        `📞 Hospital Number: ${bestHospital.phone}\n` +
+        `⏱ ETA to hospital: ${bestHospital.duration} (${bestHospital.distance})\n\n` +
+        `🚑 Nearest Ambulance: ${bestAmbulance.name}\n` +
+        `📞 Ambulance Number: ${bestAmbulance.phone}\n` +
+        `⏱ Ambulance arrival: ${bestAmbulance.duration} (${bestAmbulance.distance})\n\n` +
+        `⚠️ Please stay calm. An ambulance has been coordinated. Help is on the way.`;
+
+      await sendMessage(caseItem.id, "logistics-agent", "emergency", "CIRO Logistics Agent", chatMessage);
+
+      // 5. Update case status in database so it is not processed again
+      await updateCase(caseItem.id, { logisticsDispatched: true });
+
+      // 6. Log confirmation to Orchestrator
+      await addIntelligenceLog({
+        caseId: caseItem.id,
+        agentName: "Orchestrator",
+        thought: `LogisticsAgent dispatch complete. Patient notified. Active ambulance tracking established.`,
+        confidence: 0.98,
+        action: "DISPATCH_CONFIRMED",
+      });
+
+    } catch (e: any) {
+      console.warn("Failed automatic logistics dispatch for case:", caseItem.id, e);
+    } finally {
+      processingLogistics.current.delete(caseItem.id);
+    }
+  };
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === "granted") {
+          const loc = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+          setUserLocation({
+            latitude: loc.coords.latitude,
+            longitude: loc.coords.longitude,
+          });
+        }
+      } catch (e) {
+        console.log("Error getting location: ", e);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (activeBottomTab === "chat") {
+      const timer = setTimeout(() => {
+        chatInputRef.current?.focus();
+      }, 150);
+      return () => clearTimeout(timer);
+    }
+  }, [activeBottomTab]);
 
   const getMockIntelLogs = (c: any) => {
     const caseIdLabel = c?.id ? `#${c.id.substring(0, 6)}` : "#fC5JKm";
@@ -186,27 +294,42 @@ export default function EmergencyDispatcher() {
     terminalBg: "#020617",
   };
 
-  // 1. Subscribe to active cases (Only High or Critical cases in Emergency Dispatch)
+  // 1. Subscribe to active cases (All active cases, sorted by severity)
   useEffect(() => {
     const unsub = subscribeToAllCases((data) => {
-      const filteredData = data.filter(
-        (c) => c.severity === "critical" || c.severity === "high"
-      );
-      setCases(filteredData);
-      if (filteredData.length > 0 && !selectedCase) {
-        setSelectedCase(filteredData[0]);
-      } else if (selectedCase) {
-        const updated = filteredData.find((c) => c.id === selectedCase.id);
+      const activeCases = data.filter(
+        (c) => c.status !== "completed" && 
+               c.status !== "closed" && 
+               c.status !== "resolved" &&
+               (c.severity === "critical" || c.severity === "high")
+      ).sort((a, b) => {
+        const severityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+        const sevA = severityOrder[a.severity] ?? 4;
+        const sevB = severityOrder[b.severity] ?? 4;
+        if (sevA !== sevB) return sevA - sevB;
+        return (b.createdAt || 0) - (a.createdAt || 0);
+      });
+      setCases(activeCases);
+
+      // Run automatic logistics dispatch for high/critical cases that haven't been processed yet
+      activeCases.forEach((c) => {
+        if (!c.logisticsDispatched && !processingLogistics.current.has(c.id)) {
+          processingLogistics.current.add(c.id);
+          triggerLogisticsDispatch(c);
+        }
+      });
+
+      if (selectedCase) {
+        const updated = activeCases.find((c) => c.id === selectedCase.id);
         if (updated) {
           setSelectedCase(updated);
         } else {
-          // If the selected case was updated to a lower severity, deselect it
-          setSelectedCase(filteredData[0] || null);
+          setSelectedCase(null);
         }
       }
     });
     return () => unsub();
-  }, [selectedCase]);
+  }, [selectedCase?.id]);
 
   // 2. Subscribe to CIRO Multi-Agent thoughts logs
   useEffect(() => {
@@ -291,10 +414,14 @@ export default function EmergencyDispatcher() {
   // Render Main Screen Layout
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={{ flex: 1 }}
+      >
 
       {/* Top Header Bar */}
       <View style={[styles.customTopHeader, { backgroundColor: colors.cardBg, borderBottomColor: colors.cardBorder }]}>
-        <View style={styles.headerBrand}>
+        <Pressable style={styles.headerBrand} onPress={() => router.replace("/")}>
           <View style={styles.logoRedBox}>
             <Activity size={16} color="#ffffff" strokeWidth={2.5} />
           </View>
@@ -302,7 +429,7 @@ export default function EmergencyDispatcher() {
             <Text style={[styles.brandName, { color: colors.textPrimary }]}>MediLink</Text>
             <Text style={styles.brandSub}>EMERGENCY RESPONSE</Text>
           </View>
-        </View>
+        </Pressable>
         <View style={styles.headerRight}>
           <Pressable onPress={toggleTheme} style={styles.themeToggleBtn}>
             {isDark ? <Sun size={20} color="#f1f5f9" /> : <Moon size={20} color="#64748b" />}
@@ -343,7 +470,9 @@ export default function EmergencyDispatcher() {
               <Text style={styles.statsLabelRed}>HIGH SEVERITY</Text>
               <ShieldAlert size={15} color="#ef4444" />
             </View>
-            <Text style={styles.statsNumberRed}>35</Text>
+            <Text style={styles.statsNumberRed}>
+              {cases.filter(c => c.severity === "critical" || c.severity === "high").length}
+            </Text>
           </View>
 
           {/* DISPATCHES Card */}
@@ -352,7 +481,9 @@ export default function EmergencyDispatcher() {
               <Text style={[styles.statsLabel, { color: colors.textSecondary }]}>DISPATCHES</Text>
               <Truck size={15} color={colors.textSecondary} />
             </View>
-            <Text style={[styles.statsNumber, { color: colors.textPrimary }]}>3</Text>
+            <Text style={[styles.statsNumber, { color: colors.textPrimary }]}>
+              {cases.filter(c => c.status === "dispatched" || c.status === "assigned").length}
+            </Text>
           </View>
         </View>
 
@@ -387,150 +518,160 @@ export default function EmergencyDispatcher() {
             />
           ) : (
             <Map
-              latitude={33.6844}
-              longitude={73.0479}
+              latitude={userLocation ? userLocation.latitude : 33.6844}
+              longitude={userLocation ? userLocation.longitude : 73.0479}
               title="Command Center"
-              description="Active Command View"
+              description={userLocation ? "Your Current Location" : "Active Command View"}
             />
           )}
 
           {/* Coordinates Tag (Overlay Left) */}
-          <View style={styles.mapOverlayLeft}>
-            <Text style={styles.mapOverlayLeftText}>LAT: {selectedCase?.latitude.toFixed(6) || "33.974830"}</Text>
-            <Text style={styles.mapOverlayLeftText}>LNG: {selectedCase?.longitude.toFixed(6) || "71.449981"}</Text>
-          </View>
+          {(selectedCase || userLocation) && (
+            <View style={styles.mapOverlayLeft}>
+              <Text style={styles.mapOverlayLeftText}>
+                LAT: {selectedCase ? selectedCase.latitude.toFixed(6) : userLocation!.latitude.toFixed(6)}
+              </Text>
+              <Text style={styles.mapOverlayLeftText}>
+                LNG: {selectedCase ? selectedCase.longitude.toFixed(6) : userLocation!.longitude.toFixed(6)}
+              </Text>
+            </View>
+          )}
 
           {/* Nearest Hospital (Overlay Right) */}
-          <View style={styles.mapOverlayRight}>
-            <Text style={styles.mapOverlayRightLabel}>🏥 NEAREST</Text>
-            <Text style={styles.mapOverlayRightValue}>Hayatabad Med</Text>
-            <Text style={styles.mapOverlayRightSub}>ETA: 5 mins</Text>
-          </View>
-        </View>
-
-        {/* Logistics Agent Card */}
-        <View style={[styles.logisticsAgentCard, { backgroundColor: colors.cardBg, borderColor: colors.cardBorder }]}>
-          <Pressable 
-            onPress={() => setIsLogisticsCollapsed(!isLogisticsCollapsed)}
-            style={styles.logisticsHeader}
-          >
-            <View style={styles.logisticsHeaderLeft}>
-              <View style={styles.logisticsHeaderDot} />
-              <Text style={[styles.logisticsHeaderTitle, { color: colors.textPrimary }]}>🤖 LOGISTICS AGENT</Text>
-            </View>
-            <ChevronLeft size={16} color={colors.textSecondary} style={{ transform: [{ rotate: isLogisticsCollapsed ? "-90deg" : "90deg" }] }} />
-          </Pressable>
-
-          {!isLogisticsCollapsed && (
-            <View style={{ marginTop: 12 }}>
-              {/* Resource Cards Row */}
-              <View style={styles.logisticsResourceRow}>
-                {/* Nearest Hospital Card */}
-                <View style={[styles.logisticsResourceCard, { backgroundColor: colors.inputBg, borderColor: colors.cardBorder }]}>
-                  <Text style={styles.logisticsResourceLabelHospital}>🏥 NEAREST HOSPITAL</Text>
-                  <Text style={[styles.logisticsResourceTitle, { color: colors.textPrimary }]} numberOfLines={1}>
-                    Hayatabad Medical Complex
-                  </Text>
-                  <Text style={[styles.logisticsResourceSub, { color: colors.textSecondary }]} numberOfLines={2}>
-                    Hmc, Phase-4 Phase 4 Hayatabad, Peshawar
-                  </Text>
-                  <Text style={styles.logisticsResourceETA}>⏱️ ETA: 6 mins (2.0 km)</Text>
-                </View>
-
-                {/* Nearest Ambulance Card */}
-                <View style={[styles.logisticsResourceCard, { backgroundColor: colors.inputBg, borderColor: colors.cardBorder }]}>
-                  <Text style={styles.logisticsResourceLabelAmbulance}>🚚 NEAREST AMBULANCE</Text>
-                  <Text style={[styles.logisticsResourceTitle, { color: colors.textPrimary }]} numberOfLines={1}>
-                    Rescue-1122
-                  </Text>
-                  <Text style={[styles.logisticsResourceSub, { color: colors.textSecondary }]} numberOfLines={2}>
-                    Emergency Dispatch Unit Peshawar
-                  </Text>
-                  <Text style={styles.logisticsResourceETAAmp}>⏱️ Arrival: 4 mins</Text>
-                </View>
-              </View>
-
-              {/* Stepper Header Title */}
-              <View style={styles.dispatchSectionTitleRow}>
-                <Activity size={14} color="#ef4444" style={{ marginRight: 6 }} />
-                <Text style={[styles.dispatchSectionTitleText, { color: colors.textPrimary }]}>
-                  Ambulance Dispatch
-                </Text>
-              </View>
-
-              {/* Progress Stepper */}
-              <View style={styles.logisticsStepperRow}>
-                {/* Stepper Node 1: PENDING */}
-                <View style={styles.stepperNode}>
-                  <View style={[styles.stepperNodeCircle, { borderColor: getStepperIndex() >= 0 ? colors.redAccent : "#cbd5e1" }]}>
-                    <Clock size={12} color={getStepperIndex() >= 0 ? colors.redAccent : "#94a3b8"} />
-                  </View>
-                  <Text style={[styles.stepperNodeLabel, getStepperIndex() >= 0 && { color: colors.redAccent, fontWeight: "900" }]}>PENDING</Text>
-                </View>
-
-                {/* Stepper Node 2: ASSIGNED */}
-                <View style={styles.stepperNode}>
-                  <View style={[styles.stepperNodeCircle, { borderColor: getStepperIndex() >= 1 ? colors.redAccent : "#cbd5e1" }]}>
-                    <Navigation size={12} color={getStepperIndex() >= 1 ? colors.redAccent : "#94a3b8"} style={{ transform: [{ rotate: "45deg" }] }} />
-                  </View>
-                  <Text style={[styles.stepperNodeLabel, getStepperIndex() >= 1 && { color: colors.redAccent, fontWeight: "900" }]}>ASSIGNED</Text>
-                </View>
-
-                {/* Stepper Node 3: EN ROUTE */}
-                <View style={styles.stepperNode}>
-                  <View style={[styles.stepperNodeCircle, { borderColor: getStepperIndex() >= 2 ? colors.redAccent : "#cbd5e1" }]}>
-                    <Truck size={12} color={getStepperIndex() >= 2 ? colors.redAccent : "#94a3b8"} />
-                  </View>
-                  <Text style={[styles.stepperNodeLabel, getStepperIndex() >= 2 && { color: colors.redAccent, fontWeight: "900" }]}>EN ROUTE</Text>
-                </View>
-
-                {/* Stepper Node 4: ARRIVED */}
-                <View style={styles.stepperNode}>
-                  <View style={[styles.stepperNodeCircle, { borderColor: getStepperIndex() >= 3 ? colors.redAccent : "#cbd5e1" }]}>
-                    <Check size={12} color={getStepperIndex() >= 3 ? colors.redAccent : "#94a3b8"} />
-                  </View>
-                  <Text style={[styles.stepperNodeLabel, getStepperIndex() >= 3 && { color: colors.redAccent, fontWeight: "900" }]}>ARRIVED</Text>
-                </View>
-              </View>
-
-              {/* Stepper buttons */}
-              <View style={styles.logisticsButtonsRow}>
-                <Pressable
-                  onPress={() => handleUpdateStatus("assigned")}
-                  style={styles.assignBtn}
-                >
-                  <Navigation size={14} color="#ef4444" style={{ marginRight: 6, transform: [{ rotate: "45deg" }] }} />
-                  <Text style={styles.assignBtnText}>Assign Unit</Text>
-                </Pressable>
-
-                <Pressable
-                  onPress={() => handleUpdateStatus("dispatched")}
-                  style={styles.dispatchBtnPrimary}
-                >
-                  {dispatchingId === selectedCase?.id ? (
-                    <ActivityIndicator size="small" color="#ffffff" />
-                  ) : (
-                    <>
-                      <Send size={14} color="#ffffff" style={{ marginRight: 6 }} />
-                      <Text style={styles.dispatchBtnPrimaryText}>Dispatch</Text>
-                    </>
-                  )}
-                </Pressable>
-              </View>
-
-              {/* Mark Arrived On Scene bottom helper link */}
-              {selectedCase && selectedCase.status !== "completed" && (
-                <Pressable
-                  onPress={() => handleUpdateStatus("completed")}
-                  style={styles.markArrivedPressable}
-                >
-                  <Check size={14} color="#64748b" style={{ marginRight: 6 }} />
-                  <Text style={styles.markArrivedPressableText}>Mark Arrived on Scene</Text>
-                </Pressable>
-              )}
+          {selectedCase && (selectedCase.severity === "critical" || selectedCase.severity === "high") && (
+            <View style={styles.mapOverlayRight}>
+              <Text style={styles.mapOverlayRightLabel}>🏥 NEAREST</Text>
+              <Text style={styles.mapOverlayRightValue}>Hayatabad Med</Text>
+              <Text style={styles.mapOverlayRightSub}>ETA: 5 mins</Text>
             </View>
           )}
         </View>
+
+        {/* Logistics Agent Card */}
+        {selectedCase && (selectedCase.severity === "critical" || selectedCase.severity === "high") && (
+          <View style={[styles.logisticsAgentCard, { backgroundColor: colors.cardBg, borderColor: colors.cardBorder }]}>
+            <Pressable 
+              onPress={() => setIsLogisticsCollapsed(!isLogisticsCollapsed)}
+              style={styles.logisticsHeader}
+            >
+              <View style={styles.logisticsHeaderLeft}>
+                <View style={styles.logisticsHeaderDot} />
+                <Text style={[styles.logisticsHeaderTitle, { color: colors.textPrimary }]}>🤖 LOGISTICS AGENT</Text>
+              </View>
+              <ChevronLeft size={16} color={colors.textSecondary} style={{ transform: [{ rotate: isLogisticsCollapsed ? "-90deg" : "90deg" }] }} />
+            </Pressable>
+
+            {!isLogisticsCollapsed && (
+              <View style={{ marginTop: 12 }}>
+                {/* Resource Cards Row */}
+                <View style={styles.logisticsResourceRow}>
+                  {/* Nearest Hospital Card */}
+                  <View style={[styles.logisticsResourceCard, { backgroundColor: colors.inputBg, borderColor: colors.cardBorder }]}>
+                    <Text style={styles.logisticsResourceLabelHospital}>🏥 NEAREST HOSPITAL</Text>
+                    <Text style={[styles.logisticsResourceTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+                      Hayatabad Medical Complex
+                    </Text>
+                    <Text style={[styles.logisticsResourceSub, { color: colors.textSecondary }]} numberOfLines={2}>
+                      Hmc, Phase-4 Phase 4 Hayatabad, Peshawar
+                    </Text>
+                    <Text style={styles.logisticsResourceETA}>⏱️ ETA: 6 mins (2.0 km)</Text>
+                  </View>
+
+                  {/* Nearest Ambulance Card */}
+                  <View style={[styles.logisticsResourceCard, { backgroundColor: colors.inputBg, borderColor: colors.cardBorder }]}>
+                    <Text style={styles.logisticsResourceLabelAmbulance}>🚚 NEAREST AMBULANCE</Text>
+                    <Text style={[styles.logisticsResourceTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+                      Rescue-1122
+                    </Text>
+                    <Text style={[styles.logisticsResourceSub, { color: colors.textSecondary }]} numberOfLines={2}>
+                      Emergency Dispatch Unit Peshawar
+                    </Text>
+                    <Text style={styles.logisticsResourceETAAmp}>⏱️ Arrival: 4 mins</Text>
+                  </View>
+                </View>
+
+                {/* Stepper Header Title */}
+                <View style={styles.dispatchSectionTitleRow}>
+                  <Activity size={14} color="#ef4444" style={{ marginRight: 6 }} />
+                  <Text style={[styles.dispatchSectionTitleText, { color: colors.textPrimary }]}>
+                    Ambulance Dispatch
+                  </Text>
+                </View>
+
+                {/* Progress Stepper */}
+                <View style={styles.logisticsStepperRow}>
+                  {/* Stepper Node 1: PENDING */}
+                  <View style={styles.stepperNode}>
+                    <View style={[styles.stepperNodeCircle, { borderColor: getStepperIndex() >= 0 ? colors.redAccent : "#cbd5e1" }]}>
+                      <Clock size={12} color={getStepperIndex() >= 0 ? colors.redAccent : "#94a3b8"} />
+                    </View>
+                    <Text style={[styles.stepperNodeLabel, getStepperIndex() >= 0 && { color: colors.redAccent, fontWeight: "900" }]}>PENDING</Text>
+                  </View>
+
+                  {/* Stepper Node 2: ASSIGNED */}
+                  <View style={styles.stepperNode}>
+                    <View style={[styles.stepperNodeCircle, { borderColor: getStepperIndex() >= 1 ? colors.redAccent : "#cbd5e1" }]}>
+                      <Navigation size={12} color={getStepperIndex() >= 1 ? colors.redAccent : "#94a3b8"} style={{ transform: [{ rotate: "45deg" }] }} />
+                    </View>
+                    <Text style={[styles.stepperNodeLabel, getStepperIndex() >= 1 && { color: colors.redAccent, fontWeight: "900" }]}>ASSIGNED</Text>
+                  </View>
+
+                  {/* Stepper Node 3: EN ROUTE */}
+                  <View style={styles.stepperNode}>
+                    <View style={[styles.stepperNodeCircle, { borderColor: getStepperIndex() >= 2 ? colors.redAccent : "#cbd5e1" }]}>
+                      <Truck size={12} color={getStepperIndex() >= 2 ? colors.redAccent : "#94a3b8"} />
+                    </View>
+                    <Text style={[styles.stepperNodeLabel, getStepperIndex() >= 2 && { color: colors.redAccent, fontWeight: "900" }]}>EN ROUTE</Text>
+                  </View>
+
+                  {/* Stepper Node 4: ARRIVED */}
+                  <View style={styles.stepperNode}>
+                    <View style={[styles.stepperNodeCircle, { borderColor: getStepperIndex() >= 3 ? colors.redAccent : "#cbd5e1" }]}>
+                      <Check size={12} color={getStepperIndex() >= 3 ? colors.redAccent : "#94a3b8"} />
+                    </View>
+                    <Text style={[styles.stepperNodeLabel, getStepperIndex() >= 3 && { color: colors.redAccent, fontWeight: "900" }]}>ARRIVED</Text>
+                  </View>
+                </View>
+
+                {/* Stepper buttons */}
+                <View style={styles.logisticsButtonsRow}>
+                  <Pressable
+                    onPress={() => handleUpdateStatus("assigned")}
+                    style={styles.assignBtn}
+                  >
+                    <Navigation size={14} color="#ef4444" style={{ marginRight: 6, transform: [{ rotate: "45deg" }] }} />
+                    <Text style={styles.assignBtnText}>Assign Unit</Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => handleUpdateStatus("dispatched")}
+                    style={styles.dispatchBtnPrimary}
+                  >
+                    {dispatchingId === selectedCase?.id ? (
+                      <ActivityIndicator size="small" color="#ffffff" />
+                    ) : (
+                      <>
+                        <Send size={14} color="#ffffff" style={{ marginRight: 6 }} />
+                        <Text style={styles.dispatchBtnPrimaryText}>Dispatch</Text>
+                      </>
+                    )}
+                  </Pressable>
+                </View>
+
+                {/* Mark Arrived On Scene bottom helper link */}
+                {selectedCase && selectedCase.status !== "completed" && (
+                  <Pressable
+                    onPress={() => handleUpdateStatus("completed")}
+                    style={styles.markArrivedPressable}
+                  >
+                    <Check size={14} color="#64748b" style={{ marginRight: 6 }} />
+                    <Text style={styles.markArrivedPressableText}>Mark Arrived on Scene</Text>
+                  </Pressable>
+                )}
+              </View>
+            )}
+          </View>
+        )}
 
         {/* Priority Queue Section */}
         <View style={styles.priorityQueueCard}>
@@ -556,6 +697,44 @@ export default function EmergencyDispatcher() {
               cases.map((c) => {
                 const isSelected = selectedCase?.id === c.id;
                 const isCritical = c.severity === "critical" || c.severity === "high";
+                const isMedium = c.severity === "medium";
+                const isLow = c.severity === "low";
+
+                // High Contrast Color Logic for dark / light modes
+                let cardBgColor = colors.cardBg;
+                let cardBorderColor = isDark ? "#334155" : colors.cardBorder;
+
+                if (isCritical) {
+                  if (isSelected) {
+                    cardBgColor = isDark ? "#ef444425" : "#fee2e2";
+                    cardBorderColor = colors.redAccent;
+                  } else {
+                    cardBgColor = isDark ? "#ef444410" : "#fff5f5";
+                    cardBorderColor = isDark ? "#ef444450" : "#fca5a5";
+                  }
+                } else if (isMedium) {
+                  if (isSelected) {
+                    cardBgColor = isDark ? "#f59e0b25" : "#fef3c7";
+                    cardBorderColor = "#f59e0b";
+                  } else {
+                    cardBgColor = isDark ? "#f59e0b08" : "#fffbeb";
+                    cardBorderColor = isDark ? "#f59e0b40" : "#fcd34d";
+                  }
+                } else {
+                  // Low severity or default
+                  if (isSelected) {
+                    cardBgColor = isDark ? "#10b98125" : "#d1fae5";
+                    cardBorderColor = "#10b981";
+                  } else {
+                    cardBgColor = colors.cardBg;
+                    cardBorderColor = isDark ? "#334155" : colors.cardBorder;
+                  }
+                }
+
+                // Render dynamic time string
+                const timeString = c.createdAt 
+                  ? new Date(c.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
+                  : "Just Now";
 
                 return (
                   <Pressable
@@ -564,28 +743,37 @@ export default function EmergencyDispatcher() {
                     style={[
                       styles.priorityCaseCard,
                       {
-                        backgroundColor: isCritical ? "#fef2f2" : colors.cardBg,
-                        borderColor: isSelected ? colors.redAccent : colors.cardBorder,
+                        backgroundColor: cardBgColor,
+                        borderColor: cardBorderColor,
+                        borderWidth: isSelected ? 2 : 1,
                       },
                     ]}
                   >
-                    <View style={styles.caseAccentStrip} />
+                    <View style={[styles.caseAccentStrip, { backgroundColor: isCritical ? "#ef4444" : (isMedium ? "#f59e0b" : "#10b981") }]} />
                     <View style={styles.caseHeaderRow}>
-                      <View style={styles.caseSeverityBadge}>
-                        <Text style={styles.caseSeverityText}>{c.severity.toUpperCase()}</Text>
+                      <View style={[
+                        styles.caseSeverityBadge, 
+                        { backgroundColor: isCritical ? "#ef444420" : (isMedium ? "#f59e0b20" : "#10b98120") }
+                      ]}>
+                        <Text style={[
+                          styles.caseSeverityText, 
+                          { color: isCritical ? "#ef4444" : (isMedium ? "#f59e0b" : "#10b981") }
+                        ]}>
+                          {c.severity.toUpperCase()}
+                        </Text>
                       </View>
-                      <Text style={styles.caseTimeAgo}>1d ago</Text>
+                      <Text style={styles.caseTimeAgo}>{timeString}</Text>
                     </View>
                     <Text style={[styles.caseTitle, { color: colors.textPrimary }]}>{c.issueText}</Text>
 
                     <View style={styles.caseMetaRow}>
                       <View style={styles.caseMetaItem}>
-                        <Phone size={10} color="#64748b" />
-                        <Text style={styles.caseMetaText}>{c.patientPhone}</Text>
+                        <Phone size={10} color={colors.textSecondary} />
+                        <Text style={[styles.caseMetaText, { color: colors.textSecondary }]}>{c.patientPhone}</Text>
                       </View>
                       <View style={styles.caseMetaItem}>
-                        <MapPin size={10} color="#64748b" />
-                        <Text style={styles.caseMetaText}>{c.latitude.toFixed(2)}, {c.longitude.toFixed(2)}</Text>
+                        <MapPin size={10} color={colors.textSecondary} />
+                        <Text style={[styles.caseMetaText, { color: colors.textSecondary }]}>{c.latitude.toFixed(2)}, {c.longitude.toFixed(2)}</Text>
                       </View>
                     </View>
                   </Pressable>
@@ -603,7 +791,11 @@ export default function EmergencyDispatcher() {
         </View>
 
         {/* Intelligence Feed / Protocol / Chat bottom selector card */}
-        <View style={[styles.bottomPanelCard, { backgroundColor: colors.cardBg, borderColor: colors.cardBorder }]}>
+        <View style={[
+          styles.bottomPanelCard, 
+          { backgroundColor: colors.cardBg, borderColor: colors.cardBorder },
+          !selectedCase && { display: "none" }
+        ]}>
           {/* Panel Header Label */}
           <View style={[styles.bottomPanelHeaderRow, { borderBottomColor: colors.cardBorder }]}>
             <View style={styles.bottomPanelHeaderLeft}>
@@ -641,6 +833,9 @@ export default function EmergencyDispatcher() {
             <Pressable
               onPress={() => {
                 setActiveBottomTab("chat");
+                setTimeout(() => {
+                  chatInputRef.current?.focus();
+                }, 100);
               }}
               style={[styles.bottomTabBtn, activeBottomTab === "chat" && styles.bottomTabBtnActive]}
             >
@@ -654,38 +849,59 @@ export default function EmergencyDispatcher() {
           {/* Tab Content: INTEL */}
           {activeBottomTab === "intel" && (
             <View style={styles.bottomTabContentArea}>
-              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <Text style={{ fontSize: 13, fontWeight: "900", color: colors.textPrimary, letterSpacing: 0.3 }}>INTEL REPORT</Text>
-                <View style={{ backgroundColor: "#ecfdf5", borderWidth: 1, borderColor: "#d1fae5", paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 }}>
-                  <Text style={{ color: "#047857", fontSize: 9.5, fontWeight: "900" }}>25% CONFIDENCE</Text>
-                </View>
-              </View>
-
               {(() => {
                 const caseLogs = intelLogs.filter((log) => log.caseId === selectedCase?.id);
                 const displayLogs = caseLogs.length > 0 ? caseLogs : getMockIntelLogs(selectedCase);
+                const scoreLog = displayLogs.find((l) => l.action === "CONFIDENCE_SCORED");
+                const confidencePct = scoreLog ? Math.round((scoreLog.confidence || 0) * 100) : (selectedCase?.severity === "critical" || selectedCase?.severity === "high" ? 78 : 25);
+                
+                const badgeColor = confidencePct >= 65 
+                  ? { bg: isDark ? "#7f1d1d" : "#fee2e2", border: isDark ? "#b91c1c" : "#fca5a5", text: isDark ? "#fca5a5" : "#ef4444" }
+                  : confidencePct >= 40
+                  ? { bg: isDark ? "#78350f" : "#fef3c7", border: isDark ? "#92400e" : "#fcd34d", text: isDark ? "#fcd34d" : "#d97706" }
+                  : { bg: isDark ? "#064e3b" : "#ecfdf5", border: isDark ? "#065f46" : "#d1fae5", text: isDark ? "#6ee7b7" : "#047857" };
 
-                return displayLogs.map((log) => {
-                  const isBlue = log.action === "CONFIDENCE_SCORED";
-                  const isGreen = log.action === "NO_ESCALATION" || log.action === "CRISIS_DETECTED";
-                  
-                  // Setup styles based on card type
-                  let cardBg = "#f8fafc";
-                  let cardBdr = "#e2e8f0";
-                  let badgeBg = "#e2e8f0";
-                  let badgeText = "#475569";
+                return (
+                  <>
+                    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                      <Text style={{ fontSize: 13, fontWeight: "900", color: colors.textPrimary, letterSpacing: 0.3 }}>INTEL REPORT</Text>
+                      <View style={{ backgroundColor: badgeColor.bg, borderWidth: 1, borderColor: badgeColor.border, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 }}>
+                        <Text style={{ color: badgeColor.text, fontSize: 9.5, fontWeight: "900" }}>{confidencePct}% CONFIDENCE</Text>
+                      </View>
+                    </View>
 
-                  if (isBlue) {
-                    cardBg = "#eff6ff";
-                    cardBdr = "#bfdbfe";
-                    badgeBg = "#dbeafe";
-                    badgeText = "#1e40af";
-                  } else if (isGreen) {
-                    cardBg = "#ecfdf5";
-                    cardBdr = "#a7f3d0";
-                    badgeBg = "#d1fae5";
-                    badgeText = "#065f46";
-                  }
+                    {displayLogs.map((log) => {
+                      const isRed = log.action && (
+                        log.action.includes("ALERT") ||
+                        log.action.includes("CRISIS") ||
+                        log.action.includes("ESCALATED") ||
+                        log.action.includes("DETECTED")
+                      );
+                      const isBlue = log.action === "CONFIDENCE_SCORED" || log.action === "SIGNAL_RECEIVED" || log.action === "DISPATCH_CONFIRMED";
+                      const isGreen = log.action === "NO_ESCALATION" || log.action === "RESOURCES_FOUND" || log.action === "MAP_CLEAR";
+                      
+                      // Setup styles based on card type
+                      let cardBg = isDark ? "#1e293b" : "#f8fafc";
+                      let cardBdr = isDark ? "#475569" : "#e2e8f0";
+                      let badgeBg = isDark ? "#334155" : "#e2e8f0";
+                      let badgeText = isDark ? "#cbd5e1" : "#475569";
+
+                      if (isRed) {
+                        cardBg = isDark ? "#ef444415" : "#fef2f2";
+                        cardBdr = isDark ? "#ef444460" : "#fca5a5";
+                        badgeBg = isDark ? "#ef444430" : "#fee2e2";
+                        badgeText = isDark ? "#fca5a5" : "#ef4444";
+                      } else if (isBlue) {
+                        cardBg = isDark ? "#3b82f615" : "#eff6ff";
+                        cardBdr = isDark ? "#3b82f660" : "#bfdbfe";
+                        badgeBg = isDark ? "#3b82f630" : "#dbeafe";
+                        badgeText = isDark ? "#93c5fd" : "#3b82f6";
+                      } else if (isGreen) {
+                        cardBg = isDark ? "#10b98115" : "#ecfdf5";
+                        cardBdr = isDark ? "#10b98160" : "#a7f3d0";
+                        badgeBg = isDark ? "#10b98130" : "#d1fae5";
+                        badgeText = isDark ? "#a7f3d0" : "#10b981";
+                      }
 
                   return (
                     <View
@@ -722,23 +938,32 @@ export default function EmergencyDispatcher() {
                       </View>
                     </View>
                   );
-                });
-              })()}
-            </View>
-          )}
+                })}
+              </>
+            );
+          })()}
+        </View>
+      )}
 
           {/* Tab Content: PROTOCOL */}
           {activeBottomTab === "protocol" && (
             <View style={styles.bottomTabContentArea}>
               {/* Cardiac Alert Card */}
-              <View style={[styles.redAlertCard, { marginBottom: 12 }]}>
+              <View style={[
+                styles.redAlertCard, 
+                { 
+                  backgroundColor: isDark ? "#ef444415" : "#fef2f2", 
+                  borderColor: isDark ? "#ef444460" : "#fca5a5",
+                  marginBottom: 12 
+                }
+              ]}>
                 <View style={styles.redAlertHeaderRow}>
-                  <ShieldAlert size={16} color="#dc2626" />
-                  <Text style={styles.redAlertHeaderLabel}>
+                  <ShieldAlert size={16} color="#ef4444" />
+                  <Text style={[styles.redAlertHeaderLabel, { color: isDark ? "#fca5a5" : "#dc2626" }]}>
                     {selectedCase?.severity === "critical" ? "CRITICAL PROTOCOL ACTIVE" : "EMERGENCY PROTOCOL"}
                   </Text>
                 </View>
-                <Text style={styles.redAlertBodyText}>
+                <Text style={[styles.redAlertBodyText, { color: isDark ? "#cbd5e1" : "#7f1d1d" }]}>
                   {selectedCase?.aiSummary || "LIFE-THREATENING cardiac event. Administer Aspirin 300mg chewed IMMEDIATELY. Nitroglycerin sublingual if available. ACTIVATE EMS NOW."}
                 </Text>
               </View>
@@ -756,8 +981,8 @@ export default function EmergencyDispatcher() {
                     <>
                       {/* Medicine Card 1: Aspirin */}
                       <View style={[styles.medicineCustomCard, { backgroundColor: colors.inputBg, borderColor: colors.cardBorder, marginBottom: 8 }]}>
-                        <View style={styles.medicineHeader}>
-                          <View style={styles.blueIconCircle}>
+                        <View style={[styles.medicineHeader, { borderBottomColor: colors.cardBorder }]}>
+                          <View style={[styles.blueIconCircle, { backgroundColor: isDark ? "#1e3a8a50" : "#eff6ff" }]}>
                             <Activity size={16} color="#2563eb" />
                           </View>
                           <Text style={[styles.medicineNameText, { color: colors.textPrimary }]}>Aspirin (Disprin)</Text>
@@ -776,8 +1001,8 @@ export default function EmergencyDispatcher() {
 
                       {/* Medicine Card 2: Nitroglycerin */}
                       <View style={[styles.medicineCustomCard, { backgroundColor: colors.inputBg, borderColor: colors.cardBorder }]}>
-                        <View style={styles.medicineHeader}>
-                          <View style={styles.blueIconCircle}>
+                        <View style={[styles.medicineHeader, { borderBottomColor: colors.cardBorder }]}>
+                          <View style={[styles.blueIconCircle, { backgroundColor: isDark ? "#1e3a8a50" : "#eff6ff" }]}>
                             <Activity size={16} color="#2563eb" />
                           </View>
                           <Text style={[styles.medicineNameText, { color: colors.textPrimary }]}>Nitroglycerin (Nitrostat)</Text>
@@ -810,8 +1035,8 @@ export default function EmergencyDispatcher() {
                         },
                       ]}
                     >
-                      <View style={styles.medicineHeader}>
-                        <View style={styles.blueIconCircle}>
+                      <View style={[styles.medicineHeader, { borderBottomColor: colors.cardBorder }]}>
+                        <View style={[styles.blueIconCircle, { backgroundColor: isDark ? "#1e3a8a50" : "#eff6ff" }]}>
                           <Activity size={16} color="#2563eb" />
                         </View>
                         <Text style={[styles.medicineNameText, { color: colors.textPrimary, fontWeight: "bold" }]}>
@@ -844,44 +1069,50 @@ export default function EmergencyDispatcher() {
                 {/* Hardcoded baseline Patient Bubble matching screenshot exactly */}
                 <View style={styles.chatLeftBubbleWrapper}>
                   <Text style={styles.chatLeftSenderName}>{selectedCase?.patientPhone || "21-115-3911"}</Text>
-                  <View style={styles.chatLeftBubble}>
-                    <Text style={styles.chatLeftBubbleText}>Ambulance arrival: 3 mins (0.8 km) ⚠️</Text>
-                    <Text style={[styles.chatLeftBubbleText, { marginTop: 4 }]}>Please stay calm and keep this chat open. Help is on the way.</Text>
-                    <Text style={styles.chatLeftBubbleTime}>12:31 AM</Text>
+                  <View style={[styles.chatLeftBubble, { backgroundColor: colors.inputBg, borderColor: colors.cardBorder }]}>
+                    <Text style={[styles.chatLeftBubbleText, { color: colors.textPrimary }]}>Ambulance arrival: 3 mins (0.8 km) ⚠️</Text>
+                    <Text style={[styles.chatLeftBubbleText, { marginTop: 4, color: colors.textPrimary }]}>Please stay calm and keep this chat open. Help is on the way.</Text>
+                    <Text style={[styles.chatLeftBubbleTime, { color: colors.textSecondary }]}>12:31 AM</Text>
                   </View>
                 </View>
 
                 {/* Hardcoded Logistics Agent Bubble matching screenshot exactly */}
                 <View style={styles.chatLeftBubbleWrapper}>
                   <Text style={styles.chatLeftSenderName}>CIRO Logistics Agent - emergency</Text>
-                  <View style={styles.chatLeftBubbleCiro}>
-                    <Text style={styles.chatLeftBubbleTextCiro}>CIRO Logistics Agent has identified the nearest emergency resources for you:</Text>
+                  <View style={[
+                    styles.chatLeftBubbleCiro, 
+                    { 
+                      backgroundColor: isDark ? "#1e3a8a20" : "#ffffff", 
+                      borderColor: isDark ? "#1e40af" : "#3b82f6"
+                    }
+                  ]}>
+                    <Text style={[styles.chatLeftBubbleTextCiro, { color: isDark ? "#93c5fd" : "#1e3a8a" }]}>CIRO Logistics Agent has identified the nearest emergency resources for you:</Text>
 
-                    <View style={styles.chatLeftBubbleCiroBox}>
+                    <View style={[styles.chatLeftBubbleCiroBox, { backgroundColor: isDark ? "#0f172a" : "#eff6ff" }]}>
                       <View style={styles.chatLeftBubbleCiroBoxItem}>
                         <MapPin size={10} color="#2563eb" />
-                        <Text style={styles.chatLeftBubbleCiroBoxText}>Nearest Hospital: </Text>
-                        <Text style={styles.chatLeftBubbleCiroBoxTextBold}>Hayatabad Medical Complex</Text>
+                        <Text style={[styles.chatLeftBubbleCiroBoxText, { color: isDark ? "#94a3b8" : "#1e3a8a" }]}>Nearest Hospital: </Text>
+                        <Text style={[styles.chatLeftBubbleCiroBoxTextBold, { color: isDark ? "#f8fafc" : "#1e3a8a" }]}>Hayatabad Medical Complex</Text>
                       </View>
                       <Text style={[styles.chatLeftBubbleCiroBoxText, { marginLeft: 14, fontSize: 9.5, color: "#64748b" }]}>Phase 5, Hayatabad, Peshawar</Text>
                       <Text style={[styles.chatLeftBubbleCiroBoxText, { marginLeft: 14, fontSize: 9.5, color: "#64748b" }]}>Hospital Number: +92-91-9217480</Text>
 
                       <View style={[styles.chatLeftBubbleCiroBoxItem, { marginTop: 6 }]}>
                         <Truck size={10} color="#2563eb" />
-                        <Text style={styles.chatLeftBubbleCiroBoxText}>Nearest Ambulance: </Text>
-                        <Text style={styles.chatLeftBubbleCiroBoxTextBold}>Edhi Foundation Ambulance</Text>
+                        <Text style={[styles.chatLeftBubbleCiroBoxText, { color: isDark ? "#94a3b8" : "#1e3a8a" }]}>Nearest Ambulance: </Text>
+                        <Text style={[styles.chatLeftBubbleCiroBoxTextBold, { color: isDark ? "#f8fafc" : "#1e3a8a" }]}>Edhi Foundation Ambulance</Text>
                       </View>
                       <Text style={[styles.chatLeftBubbleCiroBoxText, { marginLeft: 14, fontSize: 9.5, color: "#64748b" }]}>Ambulance Number: +92-21-115-3911</Text>
                     </View>
 
-                    <View style={styles.chatLeftBubbleCiroETA}>
-                      <Text style={styles.chatLeftBubbleCiroETAText}>⏱️ Ambulance arrival: 3 mins (0.8 km) ⚠️</Text>
+                    <View style={[styles.chatLeftBubbleCiroETA, { backgroundColor: isDark ? "#7f1d1d30" : "#fef2f2", borderColor: isDark ? "#b91c1c" : "#fca5a5" }]}>
+                      <Text style={[styles.chatLeftBubbleCiroETAText, { color: isDark ? "#fca5a5" : "#b91c1c" }]}>⏱️ Ambulance arrival: 3 mins (0.8 km) ⚠️</Text>
                     </View>
 
-                    <Text style={[styles.chatLeftBubbleText, { fontSize: 10.5, marginTop: 6, color: "#334155" }]}>
+                    <Text style={[styles.chatLeftBubbleText, { fontSize: 10.5, marginTop: 6, color: colors.textPrimary }]}>
                       Please stay calm and keep this chat open. Help is on the way.
                     </Text>
-                    <Text style={styles.chatLeftBubbleTime}>12:33 AM</Text>
+                    <Text style={[styles.chatLeftBubbleTime, { color: colors.textSecondary }]}>12:33 AM</Text>
                   </View>
                 </View>
 
@@ -905,9 +1136,9 @@ export default function EmergencyDispatcher() {
                     return (
                       <View key={msg.id} style={styles.chatLeftBubbleWrapper}>
                         <Text style={styles.chatLeftSenderName}>{msg.senderName || "Patient"}</Text>
-                        <View style={styles.chatLeftBubble}>
-                          <Text style={styles.chatLeftBubbleText}>{msg.message}</Text>
-                          <Text style={styles.chatLeftBubbleTime}>
+                        <View style={[styles.chatLeftBubble, { backgroundColor: colors.inputBg, borderColor: colors.cardBorder }]}>
+                          <Text style={[styles.chatLeftBubbleText, { color: colors.textPrimary }]}>{msg.message}</Text>
+                          <Text style={[styles.chatLeftBubbleTime, { color: colors.textSecondary }]}>
                             {msg.timestamp ? new Date((msg.timestamp as any)?.toMillis?.() || msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : "Just Now"}
                           </Text>
                         </View>
@@ -918,11 +1149,12 @@ export default function EmergencyDispatcher() {
               </ScrollView>
 
               {/* Input Footer inline */}
-              <View style={[styles.chatFooterInputRow, { borderTopWidth: 1, borderColor: colors.cardBorder, marginTop: 8, height: 50, paddingHorizontal: 5 }]}>
+              <View style={[styles.chatFooterInputRow, { borderTopWidth: 1, borderColor: colors.cardBorder, marginTop: 8, height: 50, paddingHorizontal: 5, backgroundColor: colors.cardBg }]}>
                 <TextInput
+                  ref={chatInputRef}
                   placeholder="Type a message..."
                   placeholderTextColor="#94a3b8"
-                  style={[styles.chatFooterInput, { fontSize: 12, height: 36, backgroundColor: colors.inputBg }]}
+                  style={[styles.chatFooterInput, { fontSize: 12, height: 36, backgroundColor: colors.inputBg, color: colors.textPrimary }]}
                   value={typedMessage}
                   onChangeText={setTypedMessage}
                   onSubmitEditing={handleSendChatMessage}
@@ -937,6 +1169,7 @@ export default function EmergencyDispatcher() {
 
       </ScrollView>
       <BottomNav activeTab="emergency" />
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

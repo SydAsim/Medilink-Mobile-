@@ -10,6 +10,7 @@ import {
   Dimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { router } from "expo-router";
 import {
   Activity,
   Bell,
@@ -161,7 +162,7 @@ export default function CiroIntelligenceScreen() {
       
       {/* Top Header Bar matching emergency screen top bar layout */}
       <View style={[styles.customTopHeader, { backgroundColor: colors.cardBg, borderBottomColor: colors.cardBorder }]}>
-        <View style={styles.headerBrand}>
+        <Pressable style={styles.headerBrand} onPress={() => router.replace("/")}>
           <View style={styles.logoRedBox}>
             <Activity size={16} color="#ffffff" strokeWidth={2.5} />
           </View>
@@ -169,7 +170,7 @@ export default function CiroIntelligenceScreen() {
             <Text style={[styles.brandName, { color: colors.textPrimary }]}>MediLink</Text>
             <Text style={styles.brandSub}>EMERGENCY RESPONSE</Text>
           </View>
-        </View>
+        </Pressable>
         <View style={styles.headerRight}>
           <Pressable onPress={toggleTheme} style={styles.themeToggleBtn}>
             {isDark ? <Sun size={20} color="#f1f5f9" /> : <Moon size={20} color="#64748b" />}
@@ -188,7 +189,7 @@ export default function CiroIntelligenceScreen() {
         
         {/* Page Main Brand / Header Title matching Image 1 */}
         <View style={styles.heroSection}>
-          <Text style={styles.heroTitle}>
+          <Text style={[styles.heroTitle, { color: colors.textPrimary }]}>
             CIRO <Text style={{ color: "#8b5cf6" }}>Intelligence</Text>
           </Text>
           <Text style={[styles.heroSubtitle, { color: colors.textSecondary }]}>
@@ -366,13 +367,13 @@ export default function CiroIntelligenceScreen() {
 
         {/* -------------------- IMAGE 2: THE ORCHESTRATOR MASTER CONTROL NODE -------------------- */}
         
-        <View style={styles.orchestratorSpacerLine} />
+        <View style={[styles.orchestratorSpacerLine, { backgroundColor: colors.cardBorder }]} />
         
         <View style={styles.orchestratorHero}>
-          <View style={styles.orchestratorIconCircle}>
+          <View style={[styles.orchestratorIconCircle, { backgroundColor: isDark ? "#2e106550" : "#f5f3ff", borderColor: isDark ? "#4c1d95" : "#ddd6fe" }]}>
             <Network size={28} color="#8b5cf6" />
           </View>
-          <Text style={styles.orchestratorTitle}>THE ORCHESTRATOR</Text>
+          <Text style={[styles.orchestratorTitle, { color: colors.textPrimary }]}>THE ORCHESTRATOR</Text>
           <Text style={styles.orchestratorSubtitle}>MASTER CONTROL NODE</Text>
         </View>
 
@@ -385,27 +386,27 @@ export default function CiroIntelligenceScreen() {
           {/* Node 1: Synthesizing Multi-Agent streams */}
           <View style={[styles.orchestratorCard, { backgroundColor: isDark ? "#2e106520" : "#f5f3ff", borderColor: "#c084fc" }]}>
             <View style={styles.orchestratorCardHeader}>
-              <Text style={[styles.orchStreamLabel, { color: "#7e22ce" }]}>SYNTHESIZING MULTI-AGENT DATA STREAMS...</Text>
+              <Text style={[styles.orchStreamLabel, { color: isDark ? "#c084fc" : "#7e22ce" }]}>SYNTHESIZING MULTI-AGENT DATA STREAMS...</Text>
               <View style={styles.activeSynapseBadge}>
                 <Text style={styles.activeSynapseBadgeText}>ACTIVE_SYNAPSE</Text>
               </View>
             </View>
             {orchestratorLogs.length === 0 ? (
-              <View style={styles.orchInnerItem}>
+              <View style={[styles.orchInnerItem, { backgroundColor: isDark ? "#2e106530" : "#ffffff50" }]}>
                 <Text style={[styles.orchBodyText, { color: colors.textSecondary }]}>&gt; Standing by for signals...</Text>
               </View>
             ) : (
               orchestratorLogs.map((log, i) => {
                 const isCrisis = log.action?.includes("CRISIS") || log.action?.includes("UPGRADE");
                 return (
-                  <View key={log.id || i} style={[styles.orchInnerItem, i > 0 && { marginTop: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: isDark ? "#4b5563" : "#d8b4fe", paddingTop: 8 }]}>
+                  <View key={log.id || i} style={[styles.orchInnerItem, { backgroundColor: isDark ? "#2e106530" : "#ffffff50" }, i > 0 && { marginTop: 8, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: isDark ? "#4b5563" : "#d8b4fe", paddingTop: 8 }]}>
                     <View style={styles.orchIndicatorRow}>
                       {log.action && (
                         <View style={[styles.innerBadge, { backgroundColor: isCrisis ? "#ef4444" : log.action === "TASK_EXECUTED" ? "#8b5cf6" : "#3b82f6" }]}>
                           <Text style={styles.innerBadgeText}>{log.action}</Text>
                         </View>
                       )}
-                      <Text style={styles.orchTimestamp}>
+                      <Text style={[styles.orchTimestamp, { color: isDark ? "#c084fc" : "#6b21a8" }]}>
                         {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                       </Text>
                     </View>
@@ -436,7 +437,7 @@ export default function CiroIntelligenceScreen() {
                 {getAgentLogsText("IntelAgent")}
               </Text>
             </View>
-            <View style={styles.orchestratorCommandFooter}>
+            <View style={[styles.orchestratorCommandFooter, { backgroundColor: isDark ? "#1e293b50" : "#f8fafc", borderColor: isDark ? "#334155" : "#e2e8f0" }]}>
               <Text style={styles.orchCommandText}>
                 <Zap size={8} color="#8b5cf6" /> ORCHESTRATOR COMMAND
               </Text>
@@ -464,7 +465,7 @@ export default function CiroIntelligenceScreen() {
                 {getAgentLogsText("LogisticsAgent")}
               </Text>
             </View>
-            <View style={styles.orchestratorCommandFooter}>
+            <View style={[styles.orchestratorCommandFooter, { backgroundColor: isDark ? "#1e293b50" : "#f8fafc", borderColor: isDark ? "#334155" : "#e2e8f0" }]}>
               <Text style={styles.orchCommandText}>
                 <Zap size={8} color="#8b5cf6" /> ORCHESTRATOR COMMAND
               </Text>
@@ -492,7 +493,7 @@ export default function CiroIntelligenceScreen() {
                 {getAgentLogsText("TriageAgent")}
               </Text>
             </View>
-            <View style={[styles.orchestratorCommandFooter, { backgroundColor: isDark ? "#7f1d1d30" : "#fee2e2" }]}>
+            <View style={[styles.orchestratorCommandFooter, { backgroundColor: isDark ? "#7f1d1d30" : "#fee2e2", borderColor: isDark ? "#7f1d1d50" : "#fee2e2" }]}>
               <Text style={[styles.orchCommandText, { color: "#dc2626" }]}>
                 <Zap size={8} color="#dc2626" /> ORCHESTRATOR COMMAND
               </Text>
@@ -520,7 +521,7 @@ export default function CiroIntelligenceScreen() {
                 {getAgentLogsText("StrategistAgent")}
               </Text>
             </View>
-            <View style={styles.orchestratorCommandFooter}>
+            <View style={[styles.orchestratorCommandFooter, { backgroundColor: isDark ? "#1e293b50" : "#f8fafc", borderColor: isDark ? "#334155" : "#e2e8f0" }]}>
               <Text style={styles.orchCommandText}>
                 <Zap size={8} color="#8b5cf6" /> ORCHESTRATOR COMMAND
               </Text>

@@ -31,7 +31,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       }
     }
     
-    return systemScheme === "dark" ? "dark" : "light";
+    // Enforce "light" as default theme on phone
+    return "light";
   };
 
   const [themeMode, setThemeState] = useState<ThemeMode>(getInitialTheme);
@@ -51,9 +52,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   // Follow system theme changes if no manual preference is set yet
   useEffect(() => {
-    if (!globalThemeMemory) {
-      setThemeState(systemScheme === "dark" ? "dark" : "light");
-    }
+    // Disabled system sync to prevent forcing dark mode automatically on phone
   }, [systemScheme]);
 
   const isDark = themeMode === "dark";

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   StyleSheet,
   View,
@@ -12,11 +12,14 @@ import {
   Dimensions,
   useColorScheme,
   LayoutAnimation,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import * as ImagePicker from "expo-image-picker";
 import * as Location from "expo-location";
+import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent, isSpeechRecognitionSupported } from "../utils/speechService";
 import {
   Heart,
   FileText,
@@ -71,6 +74,8 @@ const { width } = Dimensions.get("window");
 
 export default function PatientPortal() {
   const { isDark, toggleTheme } = useTheme();
+  const descriptionInputRef = useRef<TextInput>(null);
+  const mainScrollViewRef = useRef<ScrollView>(null);
 
   // Navigation state matching tabs
   const [activeTab, setActiveTab] = useState<"report" | "history" | "profile">("report");
@@ -99,9 +104,28 @@ export default function PatientPortal() {
   const [chatInput, setChatInput] = useState("");
   const [isGuidanceOpen, setIsGuidanceOpen] = useState(true);
   const [isListening, setIsListening] = useState(false);
-  const [activeRec, setActiveRec] = useState<any>(null);
   const [simIntervalId, setSimIntervalId] = useState<any>(null);
   const [waveHeights, setWaveHeights] = useState<number[]>([8, 8, 8, 8, 8, 8, 8]);
+
+  // Native speech recognition event hooks
+  useSpeechRecognitionEvent("start", () => {
+    setIsListening(true);
+  });
+  useSpeechRecognitionEvent("end", () => {
+    setIsListening(false);
+  });
+  useSpeechRecognitionEvent("result", (event: any) => {
+    if (event.results && event.results[0]) {
+      const text = event.results[0].transcript;
+      if (text) {
+        setIssueText((prev) => prev ? prev + " " + text : text);
+      }
+    }
+  });
+  useSpeechRecognitionEvent("error", (event: any) => {
+    console.warn("[Native Speech] error:", event.error, event.message);
+    setIsListening(false);
+  });
 
   useEffect(() => {
     let interval: any;
@@ -149,7 +173,13 @@ export default function PatientPortal() {
 
   const toggleGuidance = () => {
     LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setIsGuidanceOpen(!isGuidanceOpen);
+    const nextState = !isGuidanceOpen;
+    setIsGuidanceOpen(nextState);
+    if (nextState) {
+      setTimeout(() => {
+        mainScrollViewRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+    }
   };
 
   // Manage background simulator intervals cleanup
@@ -161,121 +191,59 @@ export default function PatientPortal() {
     };
   }, [simIntervalId]);
 
-  const handleMicPressIn = () => {
-    // Resolve Web Speech Recognition API dynamically
-    const SpeechRecognition = typeof window !== "undefined"
-      ? ((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition)
-      : null;
-
-    if (SpeechRecognition) {
-      try {
-        const rec = new SpeechRecognition();
-        rec.continuous = true;
-        rec.interimResults = false;
-        rec.lang = language === "urdu" ? "ur-PK" : "en-US";
-
-        rec.onstart = () => {
-          setIsListening(true);
-        };
-
-        rec.onresult = (event: any) => {
-          let text = "";
-          for (let i = event.resultIndex; i < event.results.length; ++i) {
-            if (event.results[i].isFinal) {
-              text += event.results[i][0].transcript;
-            }
-          }
-          if (text) {
-            setIssueText((prev) => prev ? prev + " " + text : text);
-          }
-        };
-
-        rec.onerror = (event: any) => {
-          console.warn("[Speech] Recognition error handler triggered:", event.error);
-        };
-
-        rec.onend = () => {
-          setIsListening(false);
-          setActiveRec(null);
-        };
-
-        setActiveRec(rec);
-        rec.start();
-      } catch (e) {
-        console.warn("Failed to initialize or start SpeechRecognition:", e);
-        setIsListening(false);
-        setActiveRec(null);
-      }
-    } else {
-      // Standalone Mobile / Emulator fallback:
-      // Start the animated audio wave to look highly premium and active.
+  const handleMicPressIn = async () => {
+    if (!isSpeechRecognitionSupported) {
       setIsListening(true);
-      
-      // Open the clean preset and tutorial selector alert
-      Alert.alert(
-        language === "urdu" ? "وائس ان پٹ گائیڈ" : "Voice Dictation Guide",
-        language === "urdu" 
-          ? "اپنا بیان بولنے کے لیے، نیچے دیے گئے ٹیکسٹ باکس پر کلک کریں اور اپنے کی بورڈ کا مائیکروفون بٹن استعمال کریں۔\n\nیا نیچے دیے گئے آپشنز میں سے ایک کا انتخاب کریں:"
-          : "To speak your statement, tap the description box below and press the microphone icon on your mobile keyboard.\n\nOr insert a quick preset below:",
-        [
-          { 
-            text: language === "urdu" ? "🫁 سانس لینے میں دشواری" : "🫁 Breathing Issue", 
-            onPress: () => {
-              setIssueText(language === "urdu" 
-                ? "شدید سانس لینے میں دشواری اور سینے میں درد محسوس ہو رہا ہے، براہ کرم مدد بھیجیں۔" 
-                : "Experiencing severe chest tightness and difficulty breathing. Pulse rate feels extremely high."
-              );
-              setIsListening(false);
-            } 
-          },
-          { 
-            text: language === "urdu" ? "🩸 شدید چوٹ اور بہاؤ" : "🩸 Severe Injury", 
-            onPress: () => {
-              setIssueText(language === "urdu" 
-                ? "شدید حادثہ ہوا ہے، خون بہہ رہا ہے اور فوری طبی امداد کی ضرورت ہے۔" 
-                : "Severe accident with continuous bleeding. Requires immediate first aid and transport."
-              );
-              setIsListening(false);
-            } 
-          },
-          { 
-            text: language === "urdu" ? "🤕 سر کی چوٹ / چکر آنا" : "🤕 Dizziness / Trauma", 
-            onPress: () => {
-              setIssueText(language === "urdu" 
-                ? "سر پر چوٹ لگی ہے اور شدید چکر آ رہے ہیں، دھندلا نظر آ رہا ہے۔" 
-                : "Had a sudden fall, head injury, and feeling extremely dizzy with blurry vision."
-              );
-              setIsListening(false);
-            } 
-          },
-          { 
-            text: language === "urdu" ? "منسوخ کریں" : "Cancel", 
-            onPress: () => setIsListening(false),
-            style: "cancel" 
-          }
-        ]
-      );
+      // Auto-focus description input and open the keyboard
+      setTimeout(() => {
+        descriptionInputRef.current?.focus();
+      }, 100);
+
+      // Start a simulated speech typing after 2.5 seconds
+      const timeoutId = setTimeout(() => {
+        const text = language === "urdu" 
+          ? "میرے سینے میں شدید درد ہے، سانس پھول رہی ہے اور پسینہ آ رہا ہے۔"
+          : "I am experiencing severe chest pain, shortness of breath, and sweating.";
+        setIssueText((prev) => prev ? prev + " " + text : text);
+        setIsListening(false);
+      }, 2500);
+
+      setSimIntervalId(timeoutId);
+      return;
+    }
+    try {
+      const result = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+      if (!result.granted) {
+        Alert.alert("Permission Denied", "Microphone and Speech Recognition permissions are required for voice input.");
+        return;
+      }
+      setIsListening(true);
+      ExpoSpeechRecognitionModule.start({
+        lang: language === "urdu" ? "ur-PK" : "en-US",
+        continuous: false,
+        interimResults: false,
+      });
+    } catch (e) {
+      console.warn("Failed to start native SpeechRecognition:", e);
+      setIsListening(false);
     }
   };
 
   const handleMicPressOut = () => {
-    // If simulation is running, stop it
-    if (simIntervalId) {
-      clearInterval(simIntervalId);
-      setSimIntervalId(null);
+    if (!isSpeechRecognitionSupported) {
+      if (simIntervalId) {
+        clearTimeout(simIntervalId);
+        setSimIntervalId(null);
+      }
       setIsListening(false);
       return;
     }
-
-    if (activeRec) {
-      try {
-        activeRec.stop();
-      } catch (e) {
-        console.warn("Failed to stop active speech recognition:", e);
-      }
-      setIsListening(false);
-      setActiveRec(null);
+    try {
+      ExpoSpeechRecognitionModule.stop();
+    } catch (e) {
+      console.warn("Failed to stop native SpeechRecognition:", e);
     }
+    setIsListening(false);
   };
 
   const toggleMic = () => {
@@ -674,10 +642,14 @@ export default function PatientPortal() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={{ flex: 1 }}
+      >
       
       {/* Top Header Bar matching reference exactly */}
       <View style={[styles.topHeader, { backgroundColor: isDark ? "#0f172a" : "#ffffff", borderBottomColor: colors.cardBorder }]}>
-        <View style={styles.headerBrand}>
+        <Pressable style={styles.headerBrand} onPress={() => router.replace("/")}>
           <View style={styles.logoRedBox}>
             <Activity size={16} color="#ffffff" strokeWidth={2.5} />
           </View>
@@ -685,7 +657,7 @@ export default function PatientPortal() {
             <Text style={[styles.brandName, { color: colors.textPrimary }]}>MediLink</Text>
             <Text style={styles.brandSub}>EMERGENCY RESPONSE</Text>
           </View>
-        </View>
+        </Pressable>
         <View style={styles.headerRight}>
           <Pressable onPress={toggleTheme} style={styles.themeToggleBtn}>
             {isDark ? <Sun size={20} color="#f1f5f9" /> : <Moon size={20} color="#64748b" />}
@@ -760,7 +732,7 @@ export default function PatientPortal() {
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
+      <ScrollView ref={mainScrollViewRef} contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
         
         {/* ================= REPORT TAB ================= */}
         {activeTab === "report" && (
@@ -781,7 +753,9 @@ export default function PatientPortal() {
                     onPress={toggleGuidance}
                     style={styles.showGuidanceBtn}
                   >
-                    <Text style={styles.showGuidanceText}>Show Guidance →</Text>
+                    <Text style={styles.showGuidanceText}>
+                      {isGuidanceOpen ? "Hide Guidance ↓" : "Show Guidance →"}
+                    </Text>
                   </Pressable>
                 )}
               </View>
@@ -900,6 +874,7 @@ export default function PatientPortal() {
 
               {/* Description Input */}
               <TextInput
+                ref={descriptionInputRef}
                 value={issueText}
                 onChangeText={setIssueText}
                 multiline
@@ -2122,7 +2097,7 @@ export default function PatientPortal() {
 
       {/* Dynamic Bottom Tab Navigation Bar matching footer precisely */}
       <BottomNav activeTab="patient" />
-
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }

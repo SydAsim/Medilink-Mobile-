@@ -11,6 +11,8 @@ import {
   Alert,
   Dimensions,
   useColorScheme,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
@@ -517,6 +519,10 @@ export default function DoctorHub() {
   };
 
   const handleSaveToHistory = async () => {
+    if (!selectedCase) {
+      Alert.alert("Error", "No active case selected.");
+      return;
+    }
     if (!histMed.trim() || !histDose.trim() || !histFreq.trim()) {
       Alert.alert("Input Error", "Please fill in all fields (Medicine, Dose, and Frequency).");
       return;
@@ -630,30 +636,37 @@ export default function DoctorHub() {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={{ flex: 1 }}
+      >
       
       {/* CASE 1: Patient Queue Dashboard */}
       {selectedCase === null ? (
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 80 }}>
           
           {/* Top Header Bar matching reference exactly */}
-          <View style={[styles.customTopHeader, { backgroundColor: isDark ? "#0f172a" : "#ffffff", borderBottomColor: colors.cardBorder }]}>
-            <View style={styles.headerBrand}>
-              <View style={[styles.doctorLogoBox, { backgroundColor: isDark ? "#1e293b" : "#e6f4ea" }]}>
-                <Stethoscope size={18} color={isDark ? "#f1f5f9" : "#10b981"} strokeWidth={2.5} />
+          <View style={[styles.customTopHeader, { backgroundColor: colors.cardBg, borderBottomColor: colors.cardBorder }]}>
+            <Pressable style={styles.headerBrand} onPress={() => router.replace("/")}>
+              <View style={styles.logoRedBox}>
+                <Activity size={16} color="#ffffff" strokeWidth={2.5} />
               </View>
               <View style={styles.brandTextColumn}>
-                <Text style={[styles.customBrandName, { color: colors.textPrimary }]}>Doctor Command Center</Text>
-                <Text style={styles.brandSub}>AI-assisted triage & case management</Text>
+                <Text style={[styles.brandName, { color: colors.textPrimary }]}>MediLink</Text>
+                <Text style={[styles.brandSub, { color: colors.textSecondary }]}>EMERGENCY RESPONSE</Text>
               </View>
-            </View>
+            </Pressable>
             <View style={styles.headerRight}>
-              <View style={[styles.onDutyBadge, { backgroundColor: isDark ? "#1e293b" : "#e6f4ea" }]}>
-                <View style={styles.onDutyDot} />
-                <Text style={[styles.onDutyText, { color: isDark ? "#f1f5f9" : "#10b981" }]}>On Duty</Text>
-              </View>
               <Pressable onPress={toggleTheme} style={styles.themeToggleBtn}>
-                {isDark ? <Sun size={18} color="#f1f5f9" /> : <Moon size={18} color="#64748b" />}
+                {isDark ? <Sun size={20} color="#f1f5f9" /> : <Moon size={20} color="#64748b" />}
               </Pressable>
+              <Pressable style={styles.bellBtn}>
+                <Bell size={20} color="#64748b" />
+                <View style={styles.bellDot} />
+              </Pressable>
+              <View style={styles.avatarCircle}>
+                <Text style={styles.avatarText}>M</Text>
+              </View>
             </View>
           </View>
 
@@ -1336,6 +1349,7 @@ export default function DoctorHub() {
       )}
 
       <BottomNav activeTab="doctor" />
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -1367,7 +1381,7 @@ const styles = StyleSheet.create({
   brandTextColumn: {
     justifyContent: "center",
   },
-  customBrandName: {
+  brandName: {
     fontSize: 14.5,
     fontWeight: "900",
   },
@@ -1375,6 +1389,41 @@ const styles = StyleSheet.create({
     fontSize: 8.5,
     fontWeight: "700",
     color: "#64748b",
+  },
+  logoRedBox: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: "#dc2626",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 8,
+  },
+  bellBtn: {
+    position: "relative",
+    padding: 4,
+  },
+  bellDot: {
+    position: "absolute",
+    top: 2,
+    right: 2,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: "#dc2626",
+  },
+  avatarCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#dc2626",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  avatarText: {
+    color: "#ffffff",
+    fontSize: 12,
+    fontWeight: "900",
   },
   headerRight: {
     flexDirection: "row",

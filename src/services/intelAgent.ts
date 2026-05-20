@@ -406,24 +406,26 @@ export async function runIntelAgent(
   }
 
   // ── Step 9: Logistics Agent Resource Allocation & Patient Dispatch ─────────────────
-  await addIntelligenceLog({
-    caseId,
-    agentName: "LogisticsAgent",
-    thought: `[RESOURCES_FOUND] Search complete. Identified nearest emergency response team: Edhi Foundation Ambulance (3 mins, 0.8 km) and nearest hospital: Hayatabad Medical Complex. Routing locked.`,
-    confidence: 0.95,
-    action: "RESOURCES_FOUND",
-  });
-
-  // Directly send the resource info message to the patient chat!
-  try {
-    await sendMessage(
+  if (isHighSeverity) {
+    await addIntelligenceLog({
       caseId,
-      "ciro-logistics-agent",
-      "emergency",
-      "CIRO Logistics Agent",
-      `CIRO Logistics Agent has identified the nearest emergency resources for you:\n\n🏥 Nearest Hospital: Hayatabad Medical Complex (Phase 5, Hayatabad, Peshawar. Tel: +92-91-9217480)\n🚑 Nearest Ambulance: Edhi Foundation Ambulance (Tel: +92-21-115-3911)\n⏱️ Estimated Arrival: 3 mins (0.8 km)\n\nPlease stay calm and keep this chat open. Help is on the way.`
-    );
-  } catch (err) {
-    console.warn("[IntelAgent] Failed to send logistics message to patient chat:", err);
+      agentName: "LogisticsAgent",
+      thought: `[RESOURCES_FOUND] Search complete. Identified nearest emergency response team: Edhi Foundation Ambulance (3 mins, 0.8 km) and nearest hospital: Hayatabad Medical Complex. Routing locked.`,
+      confidence: 0.95,
+      action: "RESOURCES_FOUND",
+    });
+
+    // Directly send the resource info message to the patient chat!
+    try {
+      await sendMessage(
+        caseId,
+        "ciro-logistics-agent",
+        "emergency",
+        "CIRO Logistics Agent",
+        `CIRO Logistics Agent has identified the nearest emergency resources for you:\n\n🏥 Nearest Hospital: Hayatabad Medical Complex (Phase 5, Hayatabad, Peshawar. Tel: +92-91-9217480)\n🚑 Nearest Ambulance: Edhi Foundation Ambulance (Tel: +92-21-115-3911)\n⏱️ Estimated Arrival: 3 mins (0.8 km)\n\nPlease stay calm and keep this chat open. Help is on the way.`
+      );
+    } catch (err) {
+      console.warn("[IntelAgent] Failed to send logistics message to patient chat:", err);
+    }
   }
 }

@@ -81,6 +81,7 @@ export interface PatientCase {
   doctorSummary?: string;
   recommendedFirstAid?: string[];
   doctorReviewMedicines?: string[];
+  logisticsDispatched?: boolean;
 }
 
 export interface AIAnalysis {
