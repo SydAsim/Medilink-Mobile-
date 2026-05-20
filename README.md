@@ -17,7 +17,7 @@ To install the preview build on your Android device:
 
 3. **Installation Guide:** If you are unsure how to install APK files on Android, watch the step-by-step video tutorial on YouTube below:
 
-   [![How to Install APK on Android](https://img.youtube.com/vi/yY3cW4t-9_E/0.jpg)](https://www.youtube.com/watch?v=yY3cW4t-9_E)
+   [![How to Install APK on Android](https://img.youtube.com/vi/rHdc6-pY7T0/maxresdefault.jpg)](https://www.youtube.com/watch?v=rHdc6-pY7T0)
 
 ---
 
