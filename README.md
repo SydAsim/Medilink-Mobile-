@@ -23,6 +23,8 @@ To install the preview build on your Android device:
 
 ## 🏗️ System Architecture & Shared Backend
 
+![MediLink Technical Architecture](./assets/technical_diagram.png)
+
 MediLink is designed around a **Single-Source-of-Truth (SSOT)** database architecture. Both the web application (Next.js) and the mobile application (React Native) share the same Firebase configuration, syncing state in real-time through Firestore listeners.
 
 ```mermaid
