@@ -6,6 +6,21 @@ Developed using **React Native + Expo (SDK 55)** and **TypeScript**, this mobile
 
 ---
 
+## 📲 Quick Install (Android APK)
+
+To install the preview build on your Android device:
+
+1. **Direct Download:** [Click here to download the APK](https://expo.dev/accounts/syedasim17/projects/medilinkMobile/builds/b56c035e-b37b-4aa8-ae30-3fa2b49dc056)
+2. **Scan QR Code:** Scan the QR code below using your mobile camera or a QR scanner:
+
+   ![MediLink APK QR Code](./assets/images/qr-code.png)
+
+3. **Installation Guide:** If you are unsure how to install APK files on Android, watch the step-by-step video tutorial on YouTube below:
+
+   [![How to Install APK on Android](https://img.youtube.com/vi/yY3cW4t-9_E/0.jpg)](https://www.youtube.com/watch?v=yY3cW4t-9_E)
+
+---
+
 ## 🏗️ System Architecture & Shared Backend
 
 MediLink is designed around a **Single-Source-of-Truth (SSOT)** database architecture. Both the web application (Next.js) and the mobile application (React Native) share the same Firebase configuration, syncing state in real-time through Firestore listeners.
